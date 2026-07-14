@@ -1,5 +1,6 @@
 #pragma once
 
+#include "listener/telemetry_session.hpp"
 #include "telemetry/debug_probe_core.hpp"
 #include "viewer/visual_widgets.hpp"
 
@@ -14,7 +15,6 @@ class QLineEdit;
 class QLabel;
 class QPushButton;
 class QPlainTextEdit;
-class QLocalSocket;
 class QTimer;
 class external_monitor_window_tests;
 
@@ -33,11 +33,13 @@ private slots:
     void on_connect_clicked();
     void on_disconnect_clicked();
     void on_export_charts_clicked();
-    void on_socket_connected();
-    void on_socket_disconnected();
-    void on_socket_ready_read();
-    void on_socket_error();
-    void on_connect_timeout();
+    void on_session_connected(const QString& endpoint_path);
+    void on_session_disconnected();
+    void on_session_connection_failed(const QString& message);
+    void on_session_protocol_error(const QString& code, const QString& message);
+    void on_history_path_changed(const QString& path);
+    void on_session_reset();
+    void on_render_timeout();
 
 private:
     using metric_point = debug_probe_core::metric_point_v1;
@@ -58,13 +60,15 @@ private:
     QPushButton* export_charts_button;
     monitor_line_chart_widget* primary_memory_chart;
     monitor_line_chart_widget* leak_signal_chart;
+    monitor_pie_chart_widget* cache_entry_chart;
+    monitor_geometry_schematic_widget* geometry_schematic;
+    monitor_resize_history_widget* resize_history_chart;
     QPlainTextEdit* events_text;
     QPlainTextEdit* snapshot_text;
     QPlainTextEdit* warnings_text;
-    QTimer* connect_timeout_timer;
+    QTimer* render_timer;
 
-    QLocalSocket* socket;
-    QByteArray pending_read_buffer;
+    telemetry_session* session;
     QString current_endpoint_path;
     QString history_log_path;
     qint64 line_counter;
@@ -81,7 +85,7 @@ private:
     QHash<QString, QJsonObject> metric_hints_by_id;
     QVector<QString> metric_catalog_ids_in_order;
     QVector<QString> generic_primary_metric_ids;
-    QHash<QString, qint64> latest_numeric_metrics_by_id;
+    QHash<QString, double> latest_numeric_metrics_by_id;
     QHash<QString, QVector<double>> generic_series_by_id;
     QString generic_primary_display_unit;
     QSet<QString> reported_metric_hint_warnings;
@@ -93,12 +97,12 @@ private:
     QVector<double> series_gap_mib;
     QVector<double> series_high_water_cache_mib;
     QVector<double> series_baseline_delta_mib;
+    QVector<monitor_resize_history_widget::resize_entry> resize_entries;
 
     void connect_to_endpoint(const QString& endpoint_path);
     void disconnect_from_endpoint();
-    void append_raw_line_to_history(const QByteArray& compact_json_line);
-    void ensure_history_log_path(const QString& session_hint);
-    void process_incoming_line(const QByteArray& compact_json_line);
+    void reset_session_state();
+    void schedule_chart_update();
     void handle_protocol_message(const QJsonObject& message);
     void handle_hello(const QJsonObject& message);
     void handle_capabilities(const QJsonObject& message);
@@ -107,17 +111,22 @@ private:
     void handle_snapshot(const QJsonObject& message);
     void handle_marker(const QJsonObject& message);
     void handle_warning(const QJsonObject& message);
+    void handle_geometry(const QJsonObject& geometry);
+    void handle_layout_transition(const QJsonObject& event);
+    void handle_cache_decision(const QJsonObject& event);
     void update_primary_memory_chart();
     void update_leak_signal_chart();
+    void update_cache_entry_chart();
     void update_status_labels();
     void rebuild_generic_metric_selection();
-    bool has_legacy_memory_metrics() const;
-    bool use_legacy_memory_view() const;
-    QString metric_display_label(const QString& metric_id) const;
-    QString primary_metric_labels_text() const;
-    QString metric_unit(const QString& metric_id) const;
-    QString chart_unit_label_for_metric_unit(const QString& unit) const;
-    double chart_value_for_metric(const QString& metric_id, qint64 value) const;
+    [[nodiscard]] bool has_legacy_memory_metrics() const;
+    [[nodiscard]] bool use_legacy_memory_view() const;
+    [[nodiscard]] QString metric_display_label(const QString& metric_id) const;
+    [[nodiscard]] QString primary_metric_labels_text() const;
+    [[nodiscard]] QString metric_unit(const QString& metric_id) const;
+    [[nodiscard]] static QString chart_label_for_unit(const QString& unit);
+    [[nodiscard]] double
+    chart_value_for_metric(const QString& metric_id, double value) const;
     void append_generic_chart_sample();
     void merge_numeric_snapshot(const QJsonObject& snapshot);
     static bool is_numeric_json_value(const QJsonValue& value);

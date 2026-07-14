@@ -1,7 +1,10 @@
 #include "viewer/visual_widgets.hpp"
 
+#include <QAccessible>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QFontMetrics>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -59,6 +62,15 @@ void draw_axis_and_footer(
     }
 }
 
+void draw_focus_indicator(QPainter* painter, const QWidget* widget) {
+    if (painter == nullptr || widget == nullptr || !widget->hasFocus()) {
+        return;
+    }
+    painter->setBrush(Qt::NoBrush);
+    painter->setPen(QPen(widget->palette().color(QPalette::Highlight), 2));
+    painter->drawRect(widget->rect().adjusted(1, 1, -2, -2));
+}
+
 struct overlay_geometry {
     QString label;
     QColor color;
@@ -101,6 +113,7 @@ using visual_widgets_support::chart_title_height;
 using visual_widgets_support::chart_tooltip_radius_px;
 using visual_widgets_support::chart_y_axis_width;
 using visual_widgets_support::draw_axis_and_footer;
+using visual_widgets_support::draw_focus_indicator;
 using visual_widgets_support::is_finite;
 using visual_widgets_support::overlay_geometry;
 using visual_widgets_support::safe_span;
@@ -120,7 +133,7 @@ QSize project_size_preserving_aspect(
         || max_source_size.width() <= 0 || max_source_size.height() <= 0
         || available_plot_size.width() <= 0
         || available_plot_size.height() <= 0) {
-        return QSize();
+        return {};
     }
 
     const double scale_x = static_cast<double>(available_plot_size.width())
@@ -129,7 +142,7 @@ QSize project_size_preserving_aspect(
         / static_cast<double>(max_source_size.height());
     const double scale = std::min(scale_x, scale_y);
     if (!std::isfinite(scale) || scale <= 0.0) {
-        return QSize();
+        return {};
     }
 
     const int draw_width = std::max(
@@ -144,14 +157,14 @@ QSize project_size_preserving_aspect(
             std::lround(static_cast<double>(source_size.height()) * scale)
         )
     );
-    return QSize(draw_width, draw_height);
+    return { draw_width, draw_height };
 }
 
 projected_spread_region resolve_projected_spread_region(
     const QRect& first_rect, const QRect& second_rect
 ) {
     if (first_rect.isEmpty() || second_rect.isEmpty()) {
-        return projected_spread_region();
+        return {};
     }
 
     const qint64 first_area = qint64(first_rect.width()) * first_rect.height();
@@ -160,7 +173,7 @@ projected_spread_region resolve_projected_spread_region(
     const QRect outer = first_area >= second_area ? first_rect : second_rect;
     const QRect inner = first_area >= second_area ? second_rect : first_rect;
     if (!outer.contains(inner)) {
-        return projected_spread_region();
+        return {};
     }
     return projected_spread_region { outer, inner };
 }
@@ -175,18 +188,24 @@ monitor_line_chart_widget::monitor_line_chart_widget(QWidget* parent)
     , chart_series()
     , footer_text_lines()
     , tooltip_points()
-    , active_tooltip_text() {
+    , active_tooltip_text()
+    , accessible_summary_text()
+    , accessible_point_texts()
+    , keyboard_point_index(-1) {
     setAutoFillBackground(true);
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void monitor_line_chart_widget::set_title(const QString& title) {
     title_text = title;
+    rebuild_accessible_data();
     update();
 }
 
 void monitor_line_chart_widget::set_unit_label(const QString& unit_label) {
     unit_text = unit_label;
+    rebuild_accessible_data();
     update();
 }
 
@@ -197,6 +216,8 @@ void monitor_line_chart_widget::set_x_axis_label(const QString& x_axis_label) {
 
 void monitor_line_chart_widget::set_series(const QVector<series>& series_list) {
     chart_series = series_list;
+    keyboard_point_index = -1;
+    rebuild_accessible_data();
     update();
 }
 
@@ -208,7 +229,82 @@ void monitor_line_chart_widget::set_footer_lines(
 }
 
 QSize monitor_line_chart_widget::minimumSizeHint() const {
-    return QSize(360, 180);
+    return { 360, 180 };
+}
+
+void monitor_line_chart_widget::rebuild_accessible_data() {
+    QStringList summaries;
+    accessible_point_texts.clear();
+    for (const series& line : chart_series) {
+        double minimum = std::numeric_limits<double>::infinity();
+        double maximum = -std::numeric_limits<double>::infinity();
+        double latest = 0.0;
+        int finite_count = 0;
+        for (int index = 0; index < line.values.size(); ++index) {
+            const double value = line.values.at(index);
+            if (!is_finite(value)) {
+                continue;
+            }
+            minimum = std::min(minimum, value);
+            maximum = std::max(maximum, value);
+            latest = value;
+            ++finite_count;
+            const QString value_text = unit_text.isEmpty()
+                ? QString::number(value, 'g', 10)
+                : QStringLiteral("%1 %2").arg(
+                      QString::number(value, 'g', 10), unit_text
+                  );
+            accessible_point_texts.push_back(
+                QStringLiteral("%1, sample %2 of %3, value %4")
+                    .arg(line.label)
+                    .arg(index + 1)
+                    .arg(line.values.size())
+                    .arg(value_text)
+            );
+        }
+        if (finite_count > 0) {
+            const QString suffix = unit_text.isEmpty()
+                ? QString()
+                : QLatin1Char(' ') + unit_text;
+            summaries.push_back(
+                QStringLiteral(
+                    "%1: %2 samples, latest %3%4, minimum %5%4, maximum %6%4"
+                )
+                    .arg(line.label)
+                    .arg(finite_count)
+                    .arg(QString::number(latest, 'g', 10))
+                    .arg(suffix)
+                    .arg(QString::number(minimum, 'g', 10))
+                    .arg(QString::number(maximum, 'g', 10))
+            );
+        }
+    }
+    accessible_summary_text = title_text;
+    if (!summaries.isEmpty()) {
+        accessible_summary_text
+            += QStringLiteral(". ") + summaries.join(QStringLiteral(". "));
+    } else {
+        accessible_summary_text += QStringLiteral(". No chart data.");
+    }
+    if (!accessible_point_texts.isEmpty()) {
+        accessible_summary_text += QStringLiteral(
+            " Use Left and Right arrow keys to inspect individual points."
+        );
+    }
+    update_accessible_description();
+}
+
+void monitor_line_chart_widget::update_accessible_description() {
+    QString description = accessible_summary_text;
+    if (keyboard_point_index >= 0
+        && keyboard_point_index < accessible_point_texts.size()) {
+        description += QStringLiteral(" Selected point: ")
+            + accessible_point_texts.at(keyboard_point_index)
+            + QLatin1Char('.');
+    }
+    setAccessibleDescription(description);
+    QAccessibleEvent accessibility_event(this, QAccessible::DescriptionChanged);
+    QAccessible::updateAccessibility(&accessibility_event);
 }
 
 void monitor_line_chart_widget::paintEvent(QPaintEvent* event) {
@@ -218,6 +314,7 @@ void monitor_line_chart_widget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), palette().color(QPalette::Base));
+    draw_focus_indicator(&painter, this);
 
     painter.setPen(palette().color(QPalette::Text));
     painter.drawText(
@@ -470,12 +567,53 @@ void monitor_line_chart_widget::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
 }
 
+void monitor_line_chart_widget::keyPressEvent(QKeyEvent* event) {
+    if (event == nullptr || accessible_point_texts.isEmpty()) {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+
+    const int point_count = static_cast<int>(accessible_point_texts.size());
+    switch (event->key()) {
+    case Qt::Key_Left:
+    case Qt::Key_Up:
+        keyboard_point_index = keyboard_point_index <= 0
+            ? point_count - 1
+            : keyboard_point_index - 1;
+        break;
+    case Qt::Key_Right:
+    case Qt::Key_Down:
+        keyboard_point_index = (keyboard_point_index + 1) % point_count;
+        break;
+    case Qt::Key_Home:
+        keyboard_point_index = 0;
+        break;
+    case Qt::Key_End:
+        keyboard_point_index = point_count - 1;
+        break;
+    default:
+        QWidget::keyPressEvent(event);
+        return;
+    }
+
+    active_tooltip_text = accessible_point_texts.at(keyboard_point_index);
+    QToolTip::showText(mapToGlobal(rect().center()), active_tooltip_text, this);
+    update_accessible_description();
+    event->accept();
+}
+
+void monitor_line_chart_widget::focusOutEvent(QFocusEvent* event) {
+    QToolTip::hideText();
+    QWidget::focusOutEvent(event);
+}
+
 monitor_pie_chart_widget::monitor_pie_chart_widget(QWidget* parent)
     : QWidget(parent)
     , title_text()
     , chart_slices()
     , footer() {
     setAutoFillBackground(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void monitor_pie_chart_widget::set_title(const QString& title) {
@@ -493,9 +631,7 @@ void monitor_pie_chart_widget::set_footer_text(const QString& footer_text) {
     update();
 }
 
-QSize monitor_pie_chart_widget::minimumSizeHint() const {
-    return QSize(360, 190);
-}
+QSize monitor_pie_chart_widget::minimumSizeHint() const { return { 360, 190 }; }
 
 void monitor_pie_chart_widget::paintEvent(QPaintEvent* event) {
     QWidget::paintEvent(event);
@@ -504,6 +640,7 @@ void monitor_pie_chart_widget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), palette().color(QPalette::Base));
+    draw_focus_indicator(&painter, this);
 
     painter.setPen(palette().color(QPalette::Text));
     painter.drawText(
@@ -577,6 +714,7 @@ monitor_geometry_schematic_widget::monitor_geometry_schematic_widget(
     , has_snapshot(false)
     , current_snapshot() {
     setAutoFillBackground(true);
+    setFocusPolicy(Qt::StrongFocus);
     setToolTip(QStringLiteral(
         "Overlay legend: window, layout, display-card target, cache raster, "
         "preloaded raster.\nShaded area indicates preload spread."
@@ -598,7 +736,7 @@ void monitor_geometry_schematic_widget::clear_snapshot() {
 }
 
 QSize monitor_geometry_schematic_widget::minimumSizeHint() const {
-    return QSize(360, 220);
+    return { 360, 220 };
 }
 
 void monitor_geometry_schematic_widget::paintEvent(QPaintEvent* event) {
@@ -608,6 +746,7 @@ void monitor_geometry_schematic_widget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), palette().color(QPalette::Base));
+    draw_focus_indicator(&painter, this);
 
     painter.setPen(palette().color(QPalette::Text));
     painter.drawText(
@@ -773,6 +912,7 @@ monitor_resize_history_widget::monitor_resize_history_widget(QWidget* parent)
     : QWidget(parent)
     , recent_entries() {
     setAutoFillBackground(true);
+    setFocusPolicy(Qt::StrongFocus);
     setToolTip(QStringLiteral(
         "X axis: resize events over time (oldest to newest).\n"
         "Purple bar: prewarm completion time in milliseconds."
@@ -787,7 +927,7 @@ void monitor_resize_history_widget::set_entries(
 }
 
 QSize monitor_resize_history_widget::minimumSizeHint() const {
-    return QSize(360, 200);
+    return { 360, 200 };
 }
 
 void monitor_resize_history_widget::paintEvent(QPaintEvent* event) {
@@ -797,6 +937,7 @@ void monitor_resize_history_widget::paintEvent(QPaintEvent* event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), palette().color(QPalette::Base));
+    draw_focus_indicator(&painter, this);
 
     painter.setPen(palette().color(QPalette::Text));
     painter.drawText(

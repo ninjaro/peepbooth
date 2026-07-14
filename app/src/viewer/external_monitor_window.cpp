@@ -3,10 +3,7 @@
 #include "telemetry/debug_probe_core.hpp"
 #include "telemetry/shared_helpers.hpp"
 
-#include <QCoreApplication>
 #include <QDateTime>
-#include <QDir>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -16,14 +13,15 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QLocalSocket>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSplitter>
-#include <QStandardPaths>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -47,38 +45,73 @@ const QVector<QColor>& generic_chart_palette() {
     return colors;
 }
 
-QString connection_status_label_for_state(const QLocalSocket* socket) {
-    if (socket == nullptr) {
-        return QStringLiteral("Disconnected");
-    }
-
-    switch (socket->state()) {
-    case QLocalSocket::ConnectedState:
+QString
+connection_status_label_for_state(telemetry_session::connection_state state) {
+    switch (state) {
+    case telemetry_session::connection_state::connected:
         return QStringLiteral("Connected");
-    case QLocalSocket::ConnectingState:
+    case telemetry_session::connection_state::connecting:
         return QStringLiteral("Connecting");
-    case QLocalSocket::ClosingState:
-        return QStringLiteral("Closing");
-    case QLocalSocket::UnconnectedState:
+    case telemetry_session::connection_state::disconnected:
     default:
         return QStringLiteral("Disconnected");
     }
 }
 
-QString preferred_log_base_dir() {
-    const QString app_data_dir
-        = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    if (!app_data_dir.isEmpty()) {
-        return app_data_dir;
-    }
+QSize size_from_json(const QJsonValue& value) {
+    const QJsonObject object = value.toObject();
+    return { object.value(QStringLiteral("width")).toInt(),
+             object.value(QStringLiteral("height")).toInt() };
+}
 
-    const QString temp_location
-        = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    if (!temp_location.isEmpty()) {
-        return temp_location;
-    }
-
-    return QDir::tempPath();
+geometry_debug_snapshot geometry_from_json(const QJsonObject& object) {
+    return geometry_debug_snapshot {
+        .timestamp_ms
+        = object.value(QStringLiteral("timestamp_ms")).toInteger(),
+        .slot_count = object.value(QStringLiteral("slot_count")).toInt(),
+        .visible_slot_count
+        = object.value(QStringLiteral("visible_slot_count")).toInt(),
+        .window_size
+        = size_from_json(object.value(QStringLiteral("window_size"))),
+        .layout_size
+        = size_from_json(object.value(QStringLiteral("layout_size"))),
+        .display_card_size
+        = size_from_json(object.value(QStringLiteral("display_card_size"))),
+        .display_card_need_short_px
+        = object.value(QStringLiteral("display_card_need_short_px")).toInt(),
+        .device_pixel_ratio
+        = object.value(QStringLiteral("device_pixel_ratio")).toDouble(1.0),
+        .active_bucket_px
+        = object.value(QStringLiteral("active_bucket_px")).toInt(),
+        .warming_bucket_px
+        = object.value(QStringLiteral("warming_bucket_px")).toInt(),
+        .cache_window_minimum_need_px
+        = object.value(QStringLiteral("cache_window_minimum_need_px")).toInt(),
+        .cache_window_maximum_need_px
+        = object.value(QStringLiteral("cache_window_maximum_need_px")).toInt(),
+        .requested_target_bucket_px
+        = object.value(QStringLiteral("requested_target_bucket_px")).toInt(),
+        .cache_decision
+        = object.value(QStringLiteral("cache_decision")).toString(),
+        .cache_trigger
+        = object.value(QStringLiteral("cache_trigger")).toString(),
+        .cache_raster_size
+        = size_from_json(object.value(QStringLiteral("cache_raster_size"))),
+        .preloaded_raster_size
+        = size_from_json(object.value(QStringLiteral("preloaded_raster_size"))),
+        .coverage_percent
+        = object.value(QStringLiteral("coverage_percent")).toInt(),
+        .coverage_window_ms
+        = object.value(QStringLiteral("coverage_window_ms")).toInteger(),
+        .unique_size_buckets
+        = object.value(QStringLiteral("unique_size_buckets")).toInt(),
+        .prewarm_in_flight
+        = object.value(QStringLiteral("prewarm_in_flight")).toBool(),
+        .active_generation_id
+        = object.value(QStringLiteral("active_generation_id")).toInteger(),
+        .warming_generation_id
+        = object.value(QStringLiteral("warming_generation_id")).toInteger(),
+    };
 }
 
 void trim_series_to_limit(QVector<double>* series) {
@@ -89,8 +122,9 @@ void trim_series_to_limit(QVector<double>* series) {
 
 using external_monitor_window_support::connection_status_label_for_state;
 using external_monitor_window_support::generic_chart_palette;
+using external_monitor_window_support::geometry_from_json;
 using external_monitor_window_support::marker_diff_history_limit;
-using external_monitor_window_support::preferred_log_base_dir;
+using external_monitor_window_support::size_from_json;
 using external_monitor_window_support::trim_series_to_limit;
 
 external_monitor_window::external_monitor_window(QWidget* parent)
@@ -105,12 +139,14 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     , export_charts_button(nullptr)
     , primary_memory_chart(nullptr)
     , leak_signal_chart(nullptr)
+    , cache_entry_chart(nullptr)
+    , geometry_schematic(nullptr)
+    , resize_history_chart(nullptr)
     , events_text(nullptr)
     , snapshot_text(nullptr)
     , warnings_text(nullptr)
-    , connect_timeout_timer(nullptr)
-    , socket(nullptr)
-    , pending_read_buffer()
+    , render_timer(new QTimer(this))
+    , session(new telemetry_session(this))
     , current_endpoint_path()
     , history_log_path()
     , line_counter(0)
@@ -138,7 +174,8 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     , series_rss_mib()
     , series_gap_mib()
     , series_high_water_cache_mib()
-    , series_baseline_delta_mib() {
+    , series_baseline_delta_mib()
+    , resize_entries() {
     setWindowTitle(QStringLiteral("Monitor"));
 
     auto* root = new QWidget(this);
@@ -152,10 +189,21 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     auto* endpoint_label = new QLabel(QStringLiteral("Endpoint:"), root);
     endpoint_input = new QLineEdit(root);
     endpoint_input->setPlaceholderText(QStringLiteral("/tmp/monitor_...sock"));
+    endpoint_input->setAccessibleName(QStringLiteral("Telemetry endpoint"));
+    endpoint_label->setBuddy(endpoint_input);
     connect_button = new QPushButton(QStringLiteral("Connect"), root);
     disconnect_button = new QPushButton(QStringLiteral("Disconnect"), root);
     export_charts_button
         = new QPushButton(QStringLiteral("Save chart image"), root);
+    connect_button->setAccessibleDescription(
+        QStringLiteral("Connect to the configured local telemetry endpoint")
+    );
+    disconnect_button->setAccessibleDescription(
+        QStringLiteral("Disconnect from the current telemetry session")
+    );
+    export_charts_button->setAccessibleDescription(
+        QStringLiteral("Save the two current time-series charts as a PNG")
+    );
     disconnect_button->setEnabled(false);
 
     controls_row->addWidget(endpoint_label);
@@ -224,6 +272,13 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     primary_memory_chart->setToolTip(
         QStringLiteral("Hover a line point for value and sample index details.")
     );
+    primary_memory_chart->setAccessibleName(
+        QStringLiteral("Primary telemetry time series")
+    );
+    primary_memory_chart->setAccessibleDescription(QStringLiteral(
+        "Measured process memory, accounted cache memory, estimated display "
+        "memory, and derived comparison values."
+    ));
     dashboard_layout->addWidget(primary_memory_chart, 3);
 
     leak_signal_chart = new monitor_line_chart_widget(dashboard_tab);
@@ -237,8 +292,41 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     leak_signal_chart->setToolTip(QStringLiteral(
         "Derived leak diagnostics across markers and settle baselines."
     ));
+    leak_signal_chart->setAccessibleName(
+        QStringLiteral("Leak-oriented diagnostic time series")
+    );
+    leak_signal_chart->setAccessibleDescription(QStringLiteral(
+        "Derived cache high-water and post-settle baseline values."
+    ));
     dashboard_layout->addWidget(leak_signal_chart, 2);
     tabs->addTab(dashboard_tab, QStringLiteral("Dashboard"));
+
+    auto* cache_tab = new QWidget(tabs);
+    auto* cache_layout = new QVBoxLayout(cache_tab);
+    cache_layout->setContentsMargins(4, 4, 4, 4);
+    cache_layout->setSpacing(8);
+    auto* cache_top_splitter = new QSplitter(Qt::Horizontal, cache_tab);
+    cache_entry_chart = new monitor_pie_chart_widget(cache_top_splitter);
+    cache_entry_chart->set_title(
+        QStringLiteral("Ready cache entry composition")
+    );
+    cache_entry_chart->setAccessibleName(
+        QStringLiteral("Displayed and cached-only ready entries")
+    );
+    geometry_schematic
+        = new monitor_geometry_schematic_widget(cache_top_splitter);
+    geometry_schematic->setAccessibleName(
+        QStringLiteral("Card display and SVG cache geometry")
+    );
+    cache_top_splitter->addWidget(cache_entry_chart);
+    cache_top_splitter->addWidget(geometry_schematic);
+    cache_layout->addWidget(cache_top_splitter, 3);
+    resize_history_chart = new monitor_resize_history_widget(cache_tab);
+    resize_history_chart->setAccessibleName(
+        QStringLiteral("Window and cache resize history")
+    );
+    cache_layout->addWidget(resize_history_chart, 2);
+    tabs->addTab(cache_tab, QStringLiteral("SVG cache"));
 
     auto* events_tab = new QWidget(tabs);
     auto* events_layout = new QVBoxLayout(events_tab);
@@ -248,6 +336,7 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     events_text->setReadOnly(true);
     events_text->setLineWrapMode(QPlainTextEdit::NoWrap);
     events_text->setMaximumBlockCount(2048);
+    events_text->setAccessibleName(QStringLiteral("Telemetry event log"));
     events_layout->addWidget(events_text);
     tabs->addTab(events_tab, QStringLiteral("Events"));
 
@@ -258,6 +347,9 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     snapshot_text = new QPlainTextEdit(snapshot_tab);
     snapshot_text->setReadOnly(true);
     snapshot_text->setLineWrapMode(QPlainTextEdit::NoWrap);
+    snapshot_text->setAccessibleName(
+        QStringLiteral("Latest telemetry snapshot JSON")
+    );
     snapshot_layout->addWidget(snapshot_text);
     tabs->addTab(snapshot_tab, QStringLiteral("Snapshot"));
 
@@ -269,6 +361,7 @@ external_monitor_window::external_monitor_window(QWidget* parent)
     warnings_text->setReadOnly(true);
     warnings_text->setLineWrapMode(QPlainTextEdit::NoWrap);
     warnings_text->setMaximumBlockCount(2048);
+    warnings_text->setAccessibleName(QStringLiteral("Telemetry warnings"));
     warnings_layout->addWidget(warnings_text);
     tabs->addTab(warnings_tab, QStringLiteral("Warnings"));
 
@@ -287,10 +380,80 @@ external_monitor_window::external_monitor_window(QWidget* parent)
         export_charts_button, &QPushButton::clicked, this,
         &external_monitor_window::on_export_charts_clicked
     );
+    QObject::connect(
+        session, &telemetry_session::connected, this,
+        &external_monitor_window::on_session_connected
+    );
+    QObject::connect(
+        session, &telemetry_session::disconnected, this,
+        &external_monitor_window::on_session_disconnected
+    );
+    QObject::connect(
+        session, &telemetry_session::connection_failed, this,
+        &external_monitor_window::on_session_connection_failed
+    );
+    QObject::connect(
+        session, &telemetry_session::protocol_error, this,
+        &external_monitor_window::on_session_protocol_error
+    );
+    QObject::connect(
+        session, &telemetry_session::history_path_changed, this,
+        &external_monitor_window::on_history_path_changed
+    );
+    QObject::connect(
+        session, &telemetry_session::history_error, this,
+        [this](const QString& message) {
+            append_warning_line(
+                QStringLiteral("[%1] history error: %2")
+                    .arg(monitor_shared::utc_now_text(), message)
+            );
+        }
+    );
+    QObject::connect(
+        session, &telemetry_session::history_line_dropped, this,
+        [this](qint64 dropped) {
+            append_warning_line(
+                QStringLiteral("[%1] history queue dropped %2 record(s)")
+                    .arg(monitor_shared::utc_now_text())
+                    .arg(dropped)
+            );
+        }
+    );
+    QObject::connect(
+        session, &telemetry_session::session_reset, this,
+        &external_monitor_window::on_session_reset
+    );
+    QObject::connect(
+        session, &telemetry_session::protocol_message_received, this,
+        &external_monitor_window::handle_protocol_message
+    );
+    QObject::connect(
+        session, &telemetry_session::geometry_received, this,
+        &external_monitor_window::handle_geometry
+    );
+    QObject::connect(
+        session, &telemetry_session::layout_transition_received, this,
+        &external_monitor_window::handle_layout_transition
+    );
+    QObject::connect(
+        session, &telemetry_session::cache_decision_received, this,
+        &external_monitor_window::handle_cache_decision
+    );
+
+    render_timer->setSingleShot(true);
+    render_timer->setInterval(75);
+    QObject::connect(
+        render_timer, &QTimer::timeout, this,
+        &external_monitor_window::on_render_timeout
+    );
+    QWidget::setTabOrder(endpoint_input, connect_button);
+    QWidget::setTabOrder(connect_button, disconnect_button);
+    QWidget::setTabOrder(disconnect_button, export_charts_button);
 
     update_status_labels();
     update_primary_memory_chart();
     update_leak_signal_chart();
+    update_cache_entry_chart();
 }
 
 external_monitor_window::~external_monitor_window() {
@@ -345,6 +508,10 @@ void external_monitor_window::on_export_charts_clicked() {
     };
     for (const QPixmap& chart : charts) {
         if (chart.isNull()) {
+            QMessageBox::warning(
+                this, QStringLiteral("Unable to save charts"),
+                QStringLiteral("A chart could not be captured.")
+            );
             return;
         }
     }
@@ -361,6 +528,10 @@ void external_monitor_window::on_export_charts_clicked() {
     }
 
     if (width_px <= 0 || height_px <= 0) {
+        QMessageBox::warning(
+            this, QStringLiteral("Unable to save charts"),
+            QStringLiteral("The composed chart image has an invalid size.")
+        );
         return;
     }
 
@@ -378,75 +549,68 @@ void external_monitor_window::on_export_charts_clicked() {
         }
     }
     painter.end();
-    composed.save(output_path, "PNG");
+
+    QSaveFile output_file(output_path);
+    if (!output_file.open(QIODevice::WriteOnly)
+        || !composed.save(&output_file, "PNG") || !output_file.commit()) {
+        QMessageBox::warning(
+            this, QStringLiteral("Unable to save charts"),
+            QStringLiteral("Could not write '%1': %2")
+                .arg(output_path, output_file.errorString())
+        );
+        return;
+    }
+    statusBar()->showMessage(
+        QStringLiteral("Saved chart image to %1").arg(output_path), 5000
+    );
 }
 
-void external_monitor_window::on_socket_connected() {
-    if (connect_timeout_timer != nullptr) {
-        connect_timeout_timer->stop();
-    }
-    append_event_line(
-        QStringLiteral("[%1] connected to %2")
-            .arg(monitor_shared::utc_now_text(), current_endpoint_path)
-    );
+void external_monitor_window::on_session_connected(
+    const QString& endpoint_path
+) {
+    current_endpoint_path = endpoint_path;
+    append_event_line(QStringLiteral("[%1] connected to %2")
+                          .arg(monitor_shared::utc_now_text(), endpoint_path));
     update_status_labels();
 }
 
-void external_monitor_window::on_socket_disconnected() {
-    if (connect_timeout_timer != nullptr) {
-        connect_timeout_timer->stop();
-    }
+void external_monitor_window::on_session_disconnected() {
+    current_endpoint_path.clear();
     append_event_line(
         QStringLiteral("[%1] disconnected").arg(monitor_shared::utc_now_text())
     );
     update_status_labels();
 }
 
-void external_monitor_window::on_socket_ready_read() {
-    if (socket == nullptr) {
-        return;
-    }
-
-    pending_read_buffer.append(socket->readAll());
-    while (true) {
-        const qsizetype newline_index = pending_read_buffer.indexOf('\n');
-        if (newline_index < 0) {
-            break;
-        }
-
-        const QByteArray line
-            = pending_read_buffer.left(newline_index).trimmed();
-        pending_read_buffer.remove(0, newline_index + 1);
-        if (line.isEmpty()) {
-            continue;
-        }
-        process_incoming_line(line);
-    }
+void external_monitor_window::on_session_connection_failed(
+    const QString& message
+) {
+    append_warning_line(QStringLiteral("[%1] connection failed: %2")
+                            .arg(monitor_shared::utc_now_text(), message));
 }
 
-void external_monitor_window::on_socket_error() {
-    if (connect_timeout_timer != nullptr) {
-        connect_timeout_timer->stop();
-    }
-    if (socket != nullptr) {
+void external_monitor_window::on_session_protocol_error(
+    const QString& code, const QString& message
+) {
+    QTimer::singleShot(0, this, [this, code, message]() {
         append_warning_line(
-            QStringLiteral("[%1] socket error: %2")
-                .arg(monitor_shared::utc_now_text(), socket->errorString())
+            QStringLiteral("[%1] protocol error %2: %3")
+                .arg(monitor_shared::utc_now_text(), code, message)
         );
-    }
-    disconnect_from_endpoint();
+    });
 }
 
-void external_monitor_window::on_connect_timeout() {
-    if (socket == nullptr || socket->state() == QLocalSocket::ConnectedState) {
-        return;
-    }
+void external_monitor_window::on_history_path_changed(const QString& path) {
+    history_log_path = path;
+    update_status_labels();
+}
 
-    append_warning_line(
-        QStringLiteral("[%1] failed to connect to %2: timed out after 2000 ms")
-            .arg(monitor_shared::utc_now_text(), current_endpoint_path)
-    );
-    disconnect_from_endpoint();
+void external_monitor_window::on_session_reset() { reset_session_state(); }
+
+void external_monitor_window::on_render_timeout() {
+    update_primary_memory_chart();
+    update_leak_signal_chart();
+    update_cache_entry_chart();
 }
 
 void external_monitor_window::connect_to_endpoint(
@@ -458,61 +622,36 @@ void external_monitor_window::connect_to_endpoint(
         return;
     }
 
-    disconnect_from_endpoint();
-    metric_hints_by_id.clear();
-    reported_metric_hint_warnings.clear();
-
-    if (connect_timeout_timer == nullptr) {
-        connect_timeout_timer = new QTimer(this);
-        connect_timeout_timer->setSingleShot(true);
-        QObject::connect(
-            connect_timeout_timer, &QTimer::timeout, this,
-            &external_monitor_window::on_connect_timeout
-        );
-    }
-
-    socket = new QLocalSocket(this);
     current_endpoint_path = endpoint_path;
-    QObject::connect(
-        socket, &QLocalSocket::connected, this,
-        &external_monitor_window::on_socket_connected
-    );
-    QObject::connect(
-        socket, &QLocalSocket::disconnected, this,
-        &external_monitor_window::on_socket_disconnected
-    );
-    QObject::connect(
-        socket, &QLocalSocket::readyRead, this,
-        &external_monitor_window::on_socket_ready_read
-    );
-    QObject::connect(
-        socket, &QLocalSocket::errorOccurred, this,
-        &external_monitor_window::on_socket_error
-    );
-
-    socket->connectToServer(endpoint_path);
-    connect_timeout_timer->start(2000);
-
     if (endpoint_input != nullptr) {
         endpoint_input->setText(endpoint_path);
     }
+    session->connect_to_endpoint(endpoint_path);
     update_status_labels();
 }
 
 void external_monitor_window::disconnect_from_endpoint() {
-    if (connect_timeout_timer != nullptr) {
-        connect_timeout_timer->stop();
-    }
-    if (socket != nullptr) {
-        socket->disconnect(this);
-        socket->close();
-        socket->deleteLater();
-        socket = nullptr;
-    }
+    session->disconnect_from_endpoint();
     current_endpoint_path.clear();
-    pending_read_buffer.clear();
+    update_status_labels();
+}
+
+void external_monitor_window::reset_session_state() {
+    if (render_timer != nullptr) {
+        render_timer->stop();
+    }
+    history_log_path.clear();
+    line_counter = 0;
+    warning_counter = 0;
+    marker_counter = 0;
+    snapshot_counter = 0;
+    monotonic_growth_suspicion = false;
     current_app_name.clear();
     legacy_memory_view_active = false;
+    latest_metric_point = metric_point();
+    high_water_point = metric_point();
+    settle_baseline_point = metric_point();
+    settle_baseline_valid = false;
     metric_hints_by_id.clear();
     metric_catalog_ids_in_order.clear();
     generic_primary_metric_ids.clear();
@@ -520,75 +659,40 @@ void external_monitor_window::disconnect_from_endpoint() {
     generic_series_by_id.clear();
     generic_primary_display_unit.clear();
     reported_metric_hint_warnings.clear();
+    marker_history.clear();
+    marker_cache_diffs.clear();
+    series_cache_mib.clear();
+    series_widget_mib.clear();
+    series_rss_mib.clear();
+    series_gap_mib.clear();
+    series_high_water_cache_mib.clear();
+    series_baseline_delta_mib.clear();
+    resize_entries.clear();
+    if (events_text != nullptr) {
+        events_text->clear();
+    }
+    if (snapshot_text != nullptr) {
+        snapshot_text->clear();
+    }
+    if (warnings_text != nullptr) {
+        warnings_text->clear();
+    }
+    if (geometry_schematic != nullptr) {
+        geometry_schematic->clear_snapshot();
+    }
+    if (resize_history_chart != nullptr) {
+        resize_history_chart->set_entries(resize_entries);
+    }
     update_status_labels();
     update_primary_memory_chart();
     update_leak_signal_chart();
+    update_cache_entry_chart();
 }
 
-void external_monitor_window::append_raw_line_to_history(
-    const QByteArray& compact_json_line
-) {
-    ensure_history_log_path(QString());
-    if (history_log_path.isEmpty()) {
-        return;
+void external_monitor_window::schedule_chart_update() {
+    if (render_timer != nullptr && !render_timer->isActive()) {
+        render_timer->start();
     }
-
-    QFile file(history_log_path);
-    if (!file.open(
-            QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text
-        )) {
-        return;
-    }
-    file.write(compact_json_line);
-    file.write("\n");
-}
-
-void external_monitor_window::ensure_history_log_path(
-    const QString& session_hint
-) {
-    if (!history_log_path.isEmpty()) {
-        return;
-    }
-
-    const QString base_dir = preferred_log_base_dir();
-    if (base_dir.isEmpty()) {
-        return;
-    }
-
-    QDir dir(base_dir);
-    if (!dir.mkpath(QStringLiteral("monitor_history"))) {
-        return;
-    }
-
-    QString session_token = session_hint.trimmed();
-    if (session_token.isEmpty()) {
-        session_token = QStringLiteral("unknown_session");
-    }
-    session_token.replace(QChar('/'), QChar('_'));
-    session_token.replace(QChar(' '), QChar('_'));
-    session_token = session_token.left(40);
-
-    const QString timestamp = QDateTime::currentDateTimeUtc().toString(
-        QStringLiteral("yyyyMMdd_hhmmss")
-    );
-    history_log_path
-        = dir.filePath(QStringLiteral("monitor_history/%1_%2.jsonl")
-                           .arg(session_token, timestamp));
-    update_status_labels();
-}
-
-void external_monitor_window::process_incoming_line(
-    const QByteArray& compact_json_line
-) {
-    const QJsonDocument document = QJsonDocument::fromJson(compact_json_line);
-    if (!document.isObject()) {
-        append_warning_line(QStringLiteral("[%1] invalid JSON message")
-                                .arg(monitor_shared::utc_now_text()));
-        return;
-    }
-
-    append_raw_line_to_history(compact_json_line);
-    handle_protocol_message(document.object());
 }
 
 void external_monitor_window::handle_protocol_message(
@@ -624,14 +728,12 @@ void external_monitor_window::handle_protocol_message(
     }
 
     update_status_labels();
+    schedule_chart_update();
 }
 
 void external_monitor_window::handle_hello(const QJsonObject& message) {
     const QJsonObject identity = protocol_identity(message);
     current_app_name = identity.value(QStringLiteral("app")).toString();
-    ensure_history_log_path(
-        identity.value(QStringLiteral("session")).toString()
-    );
     append_event_line(
         QStringLiteral("[%1] hello app=%2 pid=%3 session=%4 build=%5 mode=%6")
             .arg(
@@ -665,7 +767,7 @@ void external_monitor_window::handle_capabilities(const QJsonObject& message) {
 
     metric_hints_by_id.clear();
     metric_catalog_ids_in_order.clear();
-    for (const QJsonValue& value : catalog) {
+    for (const auto& value : catalog) {
         const QJsonObject metric = value.toObject();
         const QString id = metric.value(QStringLiteral("id")).toString();
         if (!id.isEmpty()) {
@@ -678,7 +780,7 @@ void external_monitor_window::handle_capabilities(const QJsonObject& message) {
 
     const QJsonArray expected_catalog
         = debug_probe_core::protocol_metric_catalog_v1();
-    for (const QJsonValue& value : expected_catalog) {
+    for (const auto& value : expected_catalog) {
         const QJsonObject expected = value.toObject();
         const QString id = expected.value(QStringLiteral("id")).toString();
         if (id.isEmpty()) {
@@ -690,8 +792,8 @@ void external_monitor_window::handle_capabilities(const QJsonObject& message) {
 
         const QJsonObject incoming = metric_hints_by_id.value(id);
         const QJsonArray required_fields
-            = debug_probe_core::protocol_required_metric_hint_fields_v1();
-        for (const QJsonValue& field_value : required_fields) {
+            = debug_probe_core::required_metric_hint_fields_v1();
+        for (const auto& field_value : required_fields) {
             const QString field = field_value.toString();
             if (field.isEmpty()) {
                 continue;
@@ -713,8 +815,7 @@ void external_monitor_window::handle_capabilities(const QJsonObject& message) {
         }
     }
 
-    update_primary_memory_chart();
-    update_leak_signal_chart();
+    schedule_chart_update();
 }
 
 void external_monitor_window::handle_sample_batch(const QJsonObject& message) {
@@ -724,7 +825,7 @@ void external_monitor_window::handle_sample_batch(const QJsonObject& message) {
         return;
     }
 
-    for (const QJsonValue& sample_value : samples) {
+    for (const auto& sample_value : samples) {
         const QJsonObject sample = sample_value.toObject();
         const QString metric_id
             = sample.value(QStringLiteral("metric_id")).toString();
@@ -755,8 +856,8 @@ void external_monitor_window::handle_sample_batch(const QJsonObject& message) {
         }
 
         const QJsonArray required_fields
-            = debug_probe_core::protocol_required_metric_hint_fields_v1();
-        for (const QJsonValue& field_value : required_fields) {
+            = debug_probe_core::required_metric_hint_fields_v1();
+        for (const auto& field_value : required_fields) {
             const QString field = field_value.toString();
             if (field.isEmpty()) {
                 continue;
@@ -782,14 +883,12 @@ void external_monitor_window::handle_sample_batch(const QJsonObject& message) {
 
         const QJsonValue value = sample.value(QStringLiteral("value"));
         if (is_numeric_json_value(value)) {
-            latest_numeric_metrics_by_id.insert(
-                metric_id, integer_like_value(value)
-            );
+            latest_numeric_metrics_by_id.insert(metric_id, value.toDouble());
         }
     }
 
     const metric_point sample_point
-        = debug_probe_core::metric_point_from_sample_batch_v1(samples);
+        = debug_probe_core::point_from_sample_batch_v1(samples);
     debug_probe_core::merge_metric_point_v1(&latest_metric_point, sample_point);
 
     if (sample_point.cache_accounted_ready_bytes >= 0) {
@@ -860,13 +959,12 @@ void external_monitor_window::handle_sample_batch(const QJsonObject& message) {
 
     append_generic_chart_sample();
 
-    update_primary_memory_chart();
-    update_leak_signal_chart();
+    schedule_chart_update();
 }
 
 void external_monitor_window::handle_event_batch(const QJsonObject& message) {
     const QJsonArray events = message.value(QStringLiteral("events")).toArray();
-    for (const QJsonValue& event_value : events) {
+    for (const auto& event_value : events) {
         const QJsonObject event = event_value.toObject();
         QStringList details;
         const QString kind = event.value(QStringLiteral("kind")).toString();
@@ -911,7 +1009,7 @@ void external_monitor_window::handle_snapshot(const QJsonObject& message) {
     if (!snapshot.isEmpty()) {
         merge_numeric_snapshot(snapshot);
         const metric_point snapshot_point
-            = debug_probe_core::metric_point_from_snapshot_payload_v1(snapshot);
+            = debug_probe_core::point_from_snapshot_payload_v1(snapshot);
         debug_probe_core::merge_metric_point_v1(
             &latest_metric_point, snapshot_point
         );
@@ -1063,7 +1161,7 @@ void external_monitor_window::handle_marker(const QJsonObject& message) {
         marker_history.removeFirst();
     }
 
-    update_leak_signal_chart();
+    schedule_chart_update();
     update_status_labels();
 }
 
@@ -1075,6 +1173,147 @@ void external_monitor_window::handle_warning(const QJsonObject& message) {
     append_warning_line(
         QStringLiteral("[%1] warning %2: %3")
             .arg(monitor_shared::utc_now_text(), code, warning_message)
+    );
+}
+
+void external_monitor_window::handle_geometry(const QJsonObject& geometry) {
+    if (geometry.isEmpty() || geometry_schematic == nullptr) {
+        return;
+    }
+    const geometry_debug_snapshot snapshot = geometry_from_json(geometry);
+    geometry_schematic->set_snapshot(snapshot);
+    geometry_schematic->setAccessibleDescription(
+        QStringLiteral(
+            "%1 slots; window %2 by %3 pixels; required card short side %4 "
+            "pixels at %5 device pixel ratio; active SVG cache bucket %6 "
+            "pixels; accepted need window %7 to %8 pixels; decision %9."
+        )
+            .arg(snapshot.slot_count)
+            .arg(snapshot.window_size.width())
+            .arg(snapshot.window_size.height())
+            .arg(snapshot.display_card_need_short_px)
+            .arg(QString::number(snapshot.device_pixel_ratio, 'g', 4))
+            .arg(snapshot.active_bucket_px)
+            .arg(snapshot.cache_window_minimum_need_px)
+            .arg(snapshot.cache_window_maximum_need_px)
+            .arg(snapshot.cache_decision)
+    );
+}
+
+void external_monitor_window::handle_layout_transition(
+    const QJsonObject& event
+) {
+    QJsonObject payload
+        = event.value(QStringLiteral("layout_transition")).toObject();
+    if (payload.isEmpty()) {
+        payload = event.value(QStringLiteral("transition")).toObject();
+    }
+    if (payload.isEmpty()) {
+        payload = event;
+    }
+    const monitor_resize_history_widget::resize_entry entry {
+        .timestamp_ms
+        = payload.value(QStringLiteral("transition_end_timestamp_ms"))
+              .toInteger(
+                  payload.value(QStringLiteral("timestamp_ms")).toInteger()
+              ),
+        .prewarm_completion_ms
+        = payload.value(QStringLiteral("prewarm_completion_ms")).toInteger(-1),
+        .old_active_bucket_px
+        = payload.value(QStringLiteral("old_active_bucket_px")).toInt(),
+        .new_active_bucket_px
+        = payload.value(QStringLiteral("new_active_bucket_px")).toInt(),
+        .old_window_size
+        = size_from_json(payload.value(QStringLiteral("old_window_size"))),
+        .new_window_size
+        = size_from_json(payload.value(QStringLiteral("new_window_size"))),
+    };
+    resize_entries.push_back(entry);
+    while (resize_entries.size() > 64) {
+        resize_entries.removeFirst();
+    }
+    if (resize_history_chart != nullptr) {
+        resize_history_chart->set_entries(resize_entries);
+        resize_history_chart->setAccessibleDescription(
+            QStringLiteral(
+                "%1 recent layout transitions; latest window %2 by "
+                "%3 pixels; active SVG bucket %4 pixels."
+            )
+                .arg(resize_entries.size())
+                .arg(entry.new_window_size.width())
+                .arg(entry.new_window_size.height())
+                .arg(entry.new_active_bucket_px)
+        );
+    }
+    const QJsonObject geometry
+        = payload.value(QStringLiteral("geometry_after_resize")).toObject();
+    if (!geometry.isEmpty()) {
+        handle_geometry(geometry);
+    }
+    append_event_line(
+        QStringLiteral(
+            "[%1] layout transition window=%2x%3 bucket=%4 prewarm=%5 "
+            "ms"
+        )
+            .arg(monitor_shared::utc_now_text())
+            .arg(entry.new_window_size.width())
+            .arg(entry.new_window_size.height())
+            .arg(entry.new_active_bucket_px)
+            .arg(entry.prewarm_completion_ms)
+    );
+}
+
+void external_monitor_window::handle_cache_decision(const QJsonObject& event) {
+    QJsonObject payload = event.value(QStringLiteral("decision")).toObject();
+    if (payload.isEmpty()) {
+        payload = event;
+    }
+
+    QString decision = payload.value(QStringLiteral("reason")).toString();
+    int required_short_px
+        = payload.value(QStringLiteral("required_short_px")).toInt();
+    int cached_short_px
+        = payload.value(QStringLiteral("cached_short_px")).toInt();
+    int target_short_px
+        = payload.value(QStringLiteral("target_short_px")).toInt();
+    if (decision.isEmpty()) {
+        decision = payload.value(QStringLiteral("decision")).toString();
+    }
+    if (decision.isEmpty()) {
+        decision = payload.value(QStringLiteral("cache_decision")).toString();
+    }
+    if (required_short_px <= 0) {
+        required_short_px
+            = payload.value(QStringLiteral("display_card_need_short_px"))
+                  .toInt();
+    }
+    if (cached_short_px <= 0) {
+        cached_short_px
+            = payload.value(QStringLiteral("active_bucket_px")).toInt();
+    }
+    if (target_short_px <= 0) {
+        target_short_px
+            = payload.value(QStringLiteral("requested_target_bucket_px"))
+                  .toInt();
+    }
+    QString trigger = payload.value(QStringLiteral("trigger")).toString();
+    if (trigger.isEmpty()) {
+        trigger = payload.value(QStringLiteral("cache_trigger")).toString();
+    }
+    append_event_line(
+        QStringLiteral(
+            "[%1] SVG cache decision=%2 required=%3 px cached=%4 px target=%5 "
+            "px window=[%6,%7] trigger=%8"
+        )
+            .arg(monitor_shared::utc_now_text(), decision)
+            .arg(required_short_px)
+            .arg(cached_short_px)
+            .arg(target_short_px)
+            .arg(payload.value(QStringLiteral("cache_window_minimum_need_px"))
+                     .toInt())
+            .arg(payload.value(QStringLiteral("cache_window_maximum_need_px"))
+                     .toInt())
+            .arg(trigger)
     );
 }
 
@@ -1102,7 +1341,7 @@ void external_monitor_window::update_primary_memory_chart() {
             QStringLiteral("Primary metrics (catalog-driven fallback)")
         );
         primary_memory_chart->set_unit_label(
-            chart_unit_label_for_metric_unit(generic_primary_display_unit)
+            chart_label_for_unit(generic_primary_display_unit)
         );
         primary_memory_chart->set_x_axis_label(
             QStringLiteral("sample index (oldest -> newest)")
@@ -1212,11 +1451,48 @@ void external_monitor_window::update_leak_signal_chart() {
     );
 }
 
+void external_monitor_window::update_cache_entry_chart() {
+    if (cache_entry_chart == nullptr) {
+        return;
+    }
+    const double displayed = latest_numeric_metrics_by_id.value(
+        QStringLiteral("displayed_recent_entries"), 0.0
+    );
+    const double cached_only = latest_numeric_metrics_by_id.value(
+        QStringLiteral("cached_only_ready_entries"), 0.0
+    );
+    cache_entry_chart->set_slices(
+        QVector<monitor_pie_chart_widget::slice> {
+            {
+                .label = QStringLiteral("Displayed recently"),
+                .color = monitor_palette::blue(),
+                .value = displayed,
+            },
+            {
+                .label = QStringLiteral("Cached only"),
+                .color = monitor_palette::orange(),
+                .value = cached_only,
+            },
+        }
+    );
+    cache_entry_chart->set_footer_text(
+        QStringLiteral("Entry counts only; memory estimates are not additive.")
+    );
+    cache_entry_chart->setAccessibleDescription(
+        QStringLiteral(
+            "%1 displayed-recent entries and %2 cached-only entries. "
+            "These are counts, not memory ownership totals."
+        )
+            .arg(QString::number(displayed, 'g', 8))
+            .arg(QString::number(cached_only, 'g', 8))
+    );
+}
+
 void external_monitor_window::update_status_labels() {
     if (connection_status_label != nullptr) {
         connection_status_label->setText(
             QStringLiteral("Connection: %1")
-                .arg(connection_status_label_for_state(socket))
+                .arg(connection_status_label_for_state(session->state()))
         );
     }
 
@@ -1258,7 +1534,7 @@ void external_monitor_window::update_status_labels() {
                     summary_parts.push_back(
                         QStringLiteral("%1=%2%3")
                             .arg(metric_display_label(metric_id))
-                            .arg(QString::number(it.value()))
+                            .arg(QString::number(it.value(), 'g', 8))
                             .arg(
                                 unit.isEmpty() ? QString()
                                                : QStringLiteral(" %1").arg(unit)
@@ -1279,42 +1555,41 @@ void external_monitor_window::update_status_labels() {
                     : QStringLiteral("Primary metrics: %1")
                           .arg(summary_parts.join(QStringLiteral(" | ")))
             );
-            return;
-        }
+        } else {
+            const QString high_water_cache
+                = high_water_point.cache_accounted_ready_bytes >= 0
+                ? QString::number(
+                      monitor_shared::to_mib(
+                          high_water_point.cache_accounted_ready_bytes
+                      ),
+                      'f', 2
+                  )
+                : QStringLiteral("n/a");
+            const QString baseline_delta = settle_baseline_valid
+                    && latest_metric_point.cache_accounted_ready_bytes >= 0
+                    && settle_baseline_point.cache_accounted_ready_bytes >= 0
+                ? QString::number(
+                      monitor_shared::to_mib(
+                          latest_metric_point.cache_accounted_ready_bytes
+                          - settle_baseline_point.cache_accounted_ready_bytes
+                      ),
+                      'f', 2
+                  )
+                : QStringLiteral("n/a");
 
-        const QString high_water_cache
-            = high_water_point.cache_accounted_ready_bytes >= 0
-            ? QString::number(
-                  monitor_shared::to_mib(
-                      high_water_point.cache_accounted_ready_bytes
-                  ),
-                  'f', 2
-              )
-            : QStringLiteral("n/a");
-        const QString baseline_delta = settle_baseline_valid
-                && latest_metric_point.cache_accounted_ready_bytes >= 0
-                && settle_baseline_point.cache_accounted_ready_bytes >= 0
-            ? QString::number(
-                  monitor_shared::to_mib(
-                      latest_metric_point.cache_accounted_ready_bytes
-                      - settle_baseline_point.cache_accounted_ready_bytes
-                  ),
-                  'f', 2
-              )
-            : QStringLiteral("n/a");
-
-        leak_status_label->setText(
-            QStringLiteral(
-                "Leak signals: high-water=%1 MiB baseline-delta=%2 MiB "
-                "monotonic-suspicion=%3"
-            )
-                .arg(high_water_cache)
-                .arg(baseline_delta)
-                .arg(
-                    monotonic_growth_suspicion ? QStringLiteral("yes")
-                                               : QStringLiteral("no")
+            leak_status_label->setText(
+                QStringLiteral(
+                    "Leak signals: high-water=%1 MiB baseline-delta=%2 MiB "
+                    "monotonic-suspicion=%3"
                 )
-        );
+                    .arg(high_water_cache)
+                    .arg(baseline_delta)
+                    .arg(
+                        monotonic_growth_suspicion ? QStringLiteral("yes")
+                                                   : QStringLiteral("no")
+                    )
+            );
+        }
     }
 
     if (log_path_label != nullptr) {
@@ -1327,10 +1602,16 @@ void external_monitor_window::update_status_labels() {
     }
 
     if (connect_button != nullptr) {
-        connect_button->setEnabled(socket == nullptr);
+        connect_button->setEnabled(
+            session->state()
+            == telemetry_session::connection_state::disconnected
+        );
     }
     if (disconnect_button != nullptr) {
-        disconnect_button->setEnabled(socket != nullptr);
+        disconnect_button->setEnabled(
+            session->state()
+            != telemetry_session::connection_state::disconnected
+        );
     }
 }
 
@@ -1432,9 +1713,7 @@ QString external_monitor_window::metric_unit(const QString& metric_id) const {
         .toString();
 }
 
-QString external_monitor_window::chart_unit_label_for_metric_unit(
-    const QString& unit
-) const {
+QString external_monitor_window::chart_label_for_unit(const QString& unit) {
     if (unit == QStringLiteral("bytes")) {
         return QStringLiteral("MiB");
     }
@@ -1445,11 +1724,11 @@ QString external_monitor_window::chart_unit_label_for_metric_unit(
 }
 
 double external_monitor_window::chart_value_for_metric(
-    const QString& metric_id, qint64 value
+    const QString& metric_id, double value
 ) const {
     return metric_unit(metric_id) == QStringLiteral("bytes")
-        ? monitor_shared::to_mib(value)
-        : static_cast<double>(value);
+        ? value / (1024.0 * 1024.0)
+        : value;
 }
 
 void external_monitor_window::append_generic_chart_sample() {
@@ -1472,17 +1751,12 @@ void external_monitor_window::append_generic_chart_sample() {
 void external_monitor_window::merge_numeric_snapshot(
     const QJsonObject& snapshot
 ) {
-    for (const QString& metric_id : metric_catalog_ids_in_order) {
-        if (!snapshot.contains(metric_id)) {
-            continue;
-        }
-        const QJsonValue value = snapshot.value(metric_id);
+    for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it) {
+        const QJsonValue& value = it.value();
         if (!is_numeric_json_value(value)) {
             continue;
         }
-        latest_numeric_metrics_by_id.insert(
-            metric_id, integer_like_value(value)
-        );
+        latest_numeric_metrics_by_id.insert(it.key(), value.toDouble());
     }
 }
 

@@ -12,6 +12,8 @@
 #include <QWidget>
 
 class QEvent;
+class QFocusEvent;
+class QKeyEvent;
 class QMouseEvent;
 
 namespace monitor_visual_geometry {
@@ -20,7 +22,7 @@ struct projected_spread_region {
     QRect outer_rect;
     QRect inner_rect;
 
-    bool is_valid() const;
+    [[nodiscard]] bool is_valid() const;
 };
 
 QSize project_size_preserving_aspect(
@@ -50,12 +52,14 @@ public:
     void set_x_axis_label(const QString& x_axis_label);
     void set_series(const QVector<series>& series_list);
     void set_footer_lines(const QStringList& footer_lines);
-    QSize minimumSizeHint() const override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
 
 private:
     struct tooltip_point {
@@ -70,6 +74,12 @@ private:
     QStringList footer_text_lines;
     QVector<tooltip_point> tooltip_points;
     QString active_tooltip_text;
+    QString accessible_summary_text;
+    QStringList accessible_point_texts;
+    int keyboard_point_index;
+
+    void rebuild_accessible_data();
+    void update_accessible_description();
 };
 
 class monitor_pie_chart_widget : public QWidget {
@@ -86,7 +96,7 @@ public:
     void set_title(const QString& title);
     void set_slices(const QVector<slice>& slice_list);
     void set_footer_text(const QString& footer_text);
-    QSize minimumSizeHint() const override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -104,7 +114,7 @@ public:
     explicit monitor_geometry_schematic_widget(QWidget* parent = nullptr);
     void set_snapshot(const geometry_debug_snapshot& snapshot);
     void clear_snapshot();
-    QSize minimumSizeHint() const override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -129,7 +139,7 @@ public:
 
     explicit monitor_resize_history_widget(QWidget* parent = nullptr);
     void set_entries(const QVector<resize_entry>& entries);
-    QSize minimumSizeHint() const override;
+    [[nodiscard]] QSize minimumSizeHint() const override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
