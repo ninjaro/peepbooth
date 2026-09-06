@@ -50,7 +50,9 @@ namespace {
         const auto now = platform::monotonic_time_ns();
         const auto health = classify_health(
             state, now,
-            static_cast<std::uint64_t>(options.stale_ms) * 1'000'000ULL, cpu
+            static_cast<std::uint64_t>(options.stale_ms)
+                * std::uint64_t { 1'000'000 },
+            cpu
         );
         output << (state.process_name.empty() ? "process" : state.process_name)
                << '[' << options.pid << "] state=" << health_name(health)

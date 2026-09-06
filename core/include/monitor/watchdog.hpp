@@ -19,6 +19,9 @@ inline constexpr std::uint64_t default_watcher_lease_ns = 3'000'000'000ULL;
 enum class health {
     awaiting_heartbeat,
     healthy,
+    // Some active channels lack recent evidence while others still publish.
+    // This does not establish that the application should currently be busy.
+    degraded,
     gui_stalled,
     globally_stalled_idle,
     globally_stalled_busy,

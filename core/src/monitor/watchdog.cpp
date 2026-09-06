@@ -203,9 +203,10 @@ memory_trend_summary memory_trend::summary() const noexcept {
     const double origin = static_cast<double>(points_.front().timestamp_ns);
     double sum_x = 0;
     double sum_y = 0;
-    for (const auto& point : points_) {
-        sum_x += (static_cast<double>(point.timestamp_ns) - origin) / 1e9;
-        sum_y += static_cast<double>(point.rss_bytes);
+    for (const auto& sample_point : points_) {
+        sum_x
+            += (static_cast<double>(sample_point.timestamp_ns) - origin) / 1e9;
+        sum_y += static_cast<double>(sample_point.rss_bytes);
     }
     const double count = static_cast<double>(points_.size());
     const double mean_x = sum_x / count;
@@ -253,6 +254,7 @@ health classify_health(
 ) noexcept {
     bool any_active = false;
     bool any_current = false;
+    bool any_stale = false;
     bool gui_active = false;
     bool gui_stale = false;
     bool non_gui_current = false;
@@ -265,6 +267,7 @@ health classify_health(
             || (now_ns >= heartbeat.timestamp_ns
                 && now_ns - heartbeat.timestamp_ns > stale_after_ns);
         any_current = any_current || !stale;
+        any_stale = any_stale || stale;
         if (heartbeat.id == channel::gui) {
             gui_active = true;
             gui_stale = stale;
@@ -282,7 +285,7 @@ health classify_health(
         return cpu_percent >= 20.0 ? health::globally_stalled_busy
                                    : health::globally_stalled_idle;
     }
-    return health::healthy;
+    return any_stale ? health::degraded : health::healthy;
 }
 
 const char* health_name(const health value) noexcept {
@@ -291,6 +294,8 @@ const char* health_name(const health value) noexcept {
         return "AWAITING_HEARTBEAT";
     case health::healthy:
         return "HEALTHY";
+    case health::degraded:
+        return "DEGRADED";
     case health::gui_stalled:
         return "GUI_STALLED";
     case health::globally_stalled_idle:
