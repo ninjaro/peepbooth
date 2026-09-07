@@ -9,6 +9,8 @@
 
 namespace monitor {
 
+struct process_observation;
+
 struct console_options {
     std::uint32_t pid {};
     int interval_ms { 1000 };
@@ -31,6 +33,12 @@ struct parsed_command_line {
 parse_command_line(std::span<const std::string_view> arguments) noexcept;
 
 void write_console_usage(std::ostream& output);
+
+// Formats only the supplied observation; performs no clock, process or IPC
+// reads.
+void write_console_observation(
+    std::ostream& output, const process_observation& observation
+);
 
 int run_console_watch(
     const console_options& options, const std::atomic_bool& stop_requested,
