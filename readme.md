@@ -1,3 +1,41 @@
+![Affiche](assets/brand/madam-rekame.svg)
+
+<p align="center"><strong>PROGRAMME</strong></p>
+
+<h1 align="center">[TITRE DE LA PIÈCE]</h1>
+
+<p align="center"><em>[forme de la pièce · nombre d’actes ou de tableaux]</em><br>[lieu · date · heure]</p>
+
+---
+
+## Distribution
+
+*Personnages* ........................................................ *Interprètes*
+
+Madame Récamier ................................................. **[nom de l’interprète]**  
+*([nom], doublure de Madame Récamier)*
+
+Eugénie ................................................................ **[nom de l’interprète]**  
+*([nom], doublure d’Eugénie)*
+
+Augustin ............................................................... **[nom de l’interprète]**
+
+## Équipe
+
+Mise en scène ...................................................... **Justine & Juliette**  
+Adaptation ............................................................ **[nom]**  
+Régie ...................................................................... **[nom]**
+
+---
+
+## Argument
+
+*[Argument à déterminer.]*
+
+---
+
+## Extrait
+
 « Un jour, Sade mourra et, au ciel, ses personnages prendront vie et rejoueront leurs scènes ; il s’en réjouira, car tout y sera fidèle à ses desseins. »  
 
 Un tintement.  
@@ -15,7 +53,7 @@ Alors, quand commence-t-on ? Eugénie sera déjà assise sur le canapé ; ses pa
 
 Un tintement.  
 
-— Ce n’est pas pour vous. Restez assis.  
+— Ce n’est pas pour vous. Restez assis. / (nous sonnerons dès qu’il faudra que tu reparaisses.)  
 
 […]  
 
