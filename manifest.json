@@ -1,0 +1,203 @@
+{
+  "id": "monitor",
+  "description": "External process watchdog and failure-diagnostics console.",
+  "version": "0.2.0",
+  "cpp_standard": 20,
+  "facade": {
+    "entry_artifact": "watchdog_cli:cli"
+  },
+  "components": [
+    {
+      "id": "watchdog_contract",
+      "description": "Fixed-size versioned shared-state contract.",
+      "root": "core",
+      "modules": [],
+      "file_units": [
+        {
+          "id": "monitor/shared_state",
+          "kind": "header_only"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "contract",
+          "kind": "interface_lib",
+          "name": "monitor_watchdog_contract"
+        }
+      ]
+    },
+    {
+      "id": "watchdog_platform",
+      "description": "Linux shared-memory and process-lifetime primitives.",
+      "root": "core",
+      "modules": [
+        {
+          "monitor": [
+            {
+              "platform": [
+                "process_watch",
+                "shared_memory"
+              ]
+            }
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "platform",
+          "kind": "static_lib",
+          "name": "monitor_watchdog_platform",
+          "link": [
+            "watchdog_contract:contract"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_client",
+      "description": "Qt-free fixed-size producer client contract.",
+      "root": "core",
+      "modules": [
+        {
+          "monitor": [
+            "client"
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "client",
+          "kind": "static_lib",
+          "name": "monitor_watchdog_client",
+          "link": [
+            "watchdog_contract:contract",
+            "watchdog_platform:platform"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_runtime",
+      "description": "External state reader, health classification, and memory-trend logic.",
+      "root": "core",
+      "modules": [
+        {
+          "monitor": [
+            "watchdog",
+            "observed_process"
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "runtime",
+          "kind": "static_lib",
+          "name": "monitor_watchdog_runtime",
+          "link": [
+            "watchdog_client:client"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_console",
+      "description": "Console argument handling, presentation, and watch-loop orchestration.",
+      "root": "core",
+      "modules": [
+        {
+          "monitor": [
+            "console_watch"
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "console",
+          "kind": "static_lib",
+          "name": "monitor_watchdog_console",
+          "link": [
+            "watchdog_runtime:runtime"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_qt",
+      "description": "Optional Qt event-loop heartbeat adapter.",
+      "root": "core",
+      "stack": {
+        "qt": [
+          "Core"
+        ]
+      },
+      "modules": [
+        {
+          "monitor": [
+            {
+              "qt": [
+                "gui_heartbeat"
+              ]
+            }
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "qt",
+          "kind": "static_lib",
+          "name": "monitor_watchdog_qt",
+          "link": [
+            "watchdog_client:client"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_cli",
+      "description": "External failure-oriented console watchdog.",
+      "root": "core",
+      "modules": [],
+      "file_units": [
+        {
+          "id": "main",
+          "kind": "source_only"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "cli",
+          "kind": "exe",
+          "name": "monitor",
+          "link": [
+            "watchdog_console:console"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "watchdog_tests",
+      "description": "Focused protocol, ring, process-sampling, and trend tests.",
+      "root": "core",
+      "tests": {
+        "qttest": false
+      },
+      "modules": [],
+      "file_units": [
+        {
+          "id": "tests/monitor/watchdog_tests",
+          "kind": "source_only"
+        }
+      ],
+      "artifacts": [
+        {
+          "id": "tests",
+          "kind": "exe",
+          "name": "monitor_watchdog_tests",
+          "link": [
+            "watchdog_console:console"
+          ]
+        }
+      ]
+    }
+  ]
+}
