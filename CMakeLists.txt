@@ -15,6 +15,17 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif ()
 
+set(QT_MAJOR_VERSION 6)
+set(QT_DEFAULT_MAJOR_VERSION 6)
+find_package(Qt6 6.0 CONFIG REQUIRED COMPONENTS
+        Core
+)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+
 function(ecosystem_apply_defaults target_name)
     get_target_property(target_type ${target_name} TYPE)
     set(target_scope PRIVATE)
@@ -22,7 +33,9 @@ function(ecosystem_apply_defaults target_name)
         set(target_scope INTERFACE)
     endif ()
 
-    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    if (MSVC)
+        target_compile_options(${target_name} ${target_scope} /W4 /WX)
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(${target_name}
                 ${target_scope}
                 -Wall
@@ -31,7 +44,8 @@ function(ecosystem_apply_defaults target_name)
                 -Wconversion
                 -Wsign-conversion
                 -Wshadow
-                -Wnon-virtual-dtor
+                -Werror
+                "$<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>"
         )
     endif ()
 
@@ -49,67 +63,78 @@ function(ecosystem_apply_defaults target_name)
     endif ()
 endfunction()
 
-
-set(MONITOR_WATCHDOG_CONTRACT_HEADERS
+set(MONITOR_WATCHDOG_CONTRACT_CONTRACT_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/shared_state.hpp
 )
-set(MONITOR_WATCHDOG_CONTRACT_SOURCES
+set(MONITOR_WATCHDOG_CONTRACT_CONTRACT_SOURCES
 )
-set(MONITOR_WATCHDOG_CONTRACT_RUNTIME_SOURCES
+set(MONITOR_WATCHDOG_CONTRACT_CONTRACT_RUNTIME_SOURCES
 )
-set(MONITOR_WATCHDOG_PLATFORM_HEADERS
+set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/platform/process_watch.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/platform/shared_memory.hpp
 )
-set(MONITOR_WATCHDOG_PLATFORM_SOURCES
+set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/process_watch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory.cpp
 )
-set(MONITOR_WATCHDOG_PLATFORM_RUNTIME_SOURCES
+set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/process_watch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory.cpp
 )
-set(MONITOR_WATCHDOG_CLIENT_HEADERS
+set(MONITOR_WATCHDOG_CLIENT_CLIENT_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/client.hpp
 )
-set(MONITOR_WATCHDOG_CLIENT_SOURCES
+set(MONITOR_WATCHDOG_CLIENT_CLIENT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/client.cpp
 )
-set(MONITOR_WATCHDOG_CLIENT_RUNTIME_SOURCES
+set(MONITOR_WATCHDOG_CLIENT_CLIENT_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/client.cpp
 )
-set(MONITOR_WATCHDOG_RUNTIME_HEADERS
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/watchdog.hpp
+set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/observed_process.hpp
-)
-set(MONITOR_WATCHDOG_RUNTIME_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observed_process.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/watchdog.hpp
 )
 set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observed_process.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
 )
-set(MONITOR_WATCHDOG_CONSOLE_HEADERS
+set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observed_process.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
+)
+set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/console_watch.hpp
 )
-set(MONITOR_WATCHDOG_CONSOLE_SOURCES
+set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch.cpp
 )
-set(MONITOR_WATCHDOG_CONSOLE_RUNTIME_SOURCES
+set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch.cpp
 )
-set(MONITOR_WATCHDOG_CLI_HEADERS
+set(MONITOR_WATCHDOG_QT_QT_HEADERS
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/qt/gui_heartbeat.hpp
 )
-set(MONITOR_WATCHDOG_CLI_SOURCES
+set(MONITOR_WATCHDOG_QT_QT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/qt/gui_heartbeat.cpp
 )
-set(MONITOR_WATCHDOG_CLI_RUNTIME_SOURCES
+set(MONITOR_WATCHDOG_QT_QT_RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/qt/gui_heartbeat.cpp
+)
+set(MONITOR_WATCHDOG_CLI_CLI_HEADERS
+)
+set(MONITOR_WATCHDOG_CLI_CLI_SOURCES
+)
+set(MONITOR_WATCHDOG_CLI_CLI_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/main.cpp
 )
 add_library(watchdog_contract__contract INTERFACE)
 
+target_compile_features(watchdog_contract__contract INTERFACE cxx_std_20)
+
 target_include_directories(watchdog_contract__contract INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/include
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
 
 ecosystem_apply_defaults(watchdog_contract__contract)
@@ -121,12 +146,15 @@ target_compile_definitions(watchdog_contract__contract
 
 
 add_library(watchdog_platform__platform STATIC
-    ${MONITOR_WATCHDOG_PLATFORM_HEADERS}
-    ${MONITOR_WATCHDOG_PLATFORM_SOURCES}
+    ${MONITOR_WATCHDOG_PLATFORM_PLATFORM_HEADERS}
+    ${MONITOR_WATCHDOG_PLATFORM_PLATFORM_SOURCES}
 )
 
+target_compile_features(watchdog_platform__platform PUBLIC cxx_std_20)
+
 target_include_directories(watchdog_platform__platform PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/include
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
 
 target_link_libraries(watchdog_platform__platform PUBLIC
@@ -144,12 +172,15 @@ target_compile_definitions(watchdog_platform__platform
 
 
 add_library(watchdog_client__client STATIC
-    ${MONITOR_WATCHDOG_CLIENT_HEADERS}
-    ${MONITOR_WATCHDOG_CLIENT_SOURCES}
+    ${MONITOR_WATCHDOG_CLIENT_CLIENT_HEADERS}
+    ${MONITOR_WATCHDOG_CLIENT_CLIENT_SOURCES}
 )
 
+target_compile_features(watchdog_client__client PUBLIC cxx_std_20)
+
 target_include_directories(watchdog_client__client PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/include
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
 
 target_link_libraries(watchdog_client__client PUBLIC
@@ -168,9 +199,11 @@ target_compile_definitions(watchdog_client__client
 
 
 add_library(watchdog_runtime__runtime STATIC
-    ${MONITOR_WATCHDOG_RUNTIME_HEADERS}
-    ${MONITOR_WATCHDOG_RUNTIME_SOURCES}
+    ${MONITOR_WATCHDOG_RUNTIME_RUNTIME_HEADERS}
+    ${MONITOR_WATCHDOG_RUNTIME_RUNTIME_SOURCES}
 )
+
+target_compile_features(watchdog_runtime__runtime PUBLIC cxx_std_20)
 
 target_include_directories(watchdog_runtime__runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/include
@@ -191,9 +224,11 @@ target_compile_definitions(watchdog_runtime__runtime
 
 
 add_library(watchdog_console__console STATIC
-    ${MONITOR_WATCHDOG_CONSOLE_HEADERS}
-    ${MONITOR_WATCHDOG_CONSOLE_SOURCES}
+    ${MONITOR_WATCHDOG_CONSOLE_CONSOLE_HEADERS}
+    ${MONITOR_WATCHDOG_CONSOLE_CONSOLE_SOURCES}
 )
+
+target_compile_features(watchdog_console__console PUBLIC cxx_std_20)
 
 target_include_directories(watchdog_console__console PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/include
@@ -213,10 +248,39 @@ target_compile_definitions(watchdog_console__console
 )
 
 
-add_executable(watchdog_cli__cli
-    ${MONITOR_WATCHDOG_CLI_HEADERS}
-    ${MONITOR_WATCHDOG_CLI_RUNTIME_SOURCES}
+add_library(watchdog_qt__qt STATIC
+    ${MONITOR_WATCHDOG_QT_QT_HEADERS}
+    ${MONITOR_WATCHDOG_QT_QT_SOURCES}
 )
+
+target_compile_features(watchdog_qt__qt PUBLIC cxx_std_20)
+
+target_include_directories(watchdog_qt__qt PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
+
+target_link_libraries(watchdog_qt__qt PUBLIC
+    Qt6::Core
+    watchdog_client__client
+)
+
+set_target_properties(watchdog_qt__qt PROPERTIES OUTPUT_NAME monitor_watchdog_qt)
+
+ecosystem_apply_defaults(watchdog_qt__qt)
+
+target_compile_definitions(watchdog_qt__qt
+        PUBLIC
+        ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
+)
+
+
+add_executable(watchdog_cli__cli
+    ${MONITOR_WATCHDOG_CLI_CLI_HEADERS}
+    ${MONITOR_WATCHDOG_CLI_CLI_RUNTIME_SOURCES}
+)
+
+target_compile_features(watchdog_cli__cli PRIVATE cxx_std_20)
 
 target_include_directories(watchdog_cli__cli PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/core/include
@@ -236,9 +300,118 @@ target_compile_definitions(watchdog_cli__cli
 )
 
 
+# The visitor name is generated state; the selected target keeps its identity.
+# Retire a previous link/copy before a new selection can build at the same path.
+foreach(facade_name mvp mvp.exe)
+    if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${facade_name}.owned")
+        file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/${facade_name}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${facade_name}.owned")
+    endif()
+endforeach()
+
+get_target_property(MANIFESTO_FACADE_TYPE watchdog_cli__cli TYPE)
+if(MANIFESTO_FACADE_TYPE STREQUAL "EXECUTABLE" AND NOT ANDROID)
+    if(WIN32)
+        set(MANIFESTO_FACADE_NAME mvp.exe)
+    else()
+        set(MANIFESTO_FACADE_NAME mvp)
+    endif()
+    file(GENERATE
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-facade-$<CONFIG>.cmake"
+        CONTENT [=[
+set(source "$<TARGET_FILE:watchdog_cli__cli>")
+set(destination "${FACADE_DIR}/${FACADE_NAME}")
+if(source STREQUAL destination)
+    return()
+endif()
+if(WIN32)
+    file(CREATE_LINK "${source}" "${destination}" COPY_ON_ERROR)
+else()
+    file(RELATIVE_PATH relative "${FACADE_DIR}" "${source}")
+    file(CREATE_LINK "${relative}" "${destination}" SYMBOLIC)
+endif()
+file(WRITE "${FACADE_DIR}/CMakeFiles/manifesto-${FACADE_NAME}.owned" "generated\n")
+]=])
+    add_custom_target(_manifesto_visitor_facade_monitor ALL
+        COMMAND "${CMAKE_COMMAND}"
+            "-DFACADE_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DFACADE_NAME=${MANIFESTO_FACADE_NAME}"
+            -P "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-facade-$<CONFIG>.cmake"
+        DEPENDS watchdog_cli__cli
+        VERBATIM)
+    set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_CLEAN_FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/${MANIFESTO_FACADE_NAME}"
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${MANIFESTO_FACADE_NAME}.owned")
+endif()
+
+install(TARGETS watchdog_contract__contract EXPORT monitorTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/shared_state.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor")
+
+install(TARGETS watchdog_platform__platform EXPORT monitorTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/platform/process_watch.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor/platform")
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/platform/shared_memory.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor/platform")
+
+install(TARGETS watchdog_client__client EXPORT monitorTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/client.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor")
+
+install(TARGETS watchdog_qt__qt EXPORT monitorTargets
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/qt/gui_heartbeat.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor/qt")
+
 install(TARGETS watchdog_cli__cli
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+
+include(CMakePackageConfigHelpers)
+set(_monitor_package_dir "${CMAKE_CURRENT_BINARY_DIR}/monitor-package")
+file(MAKE_DIRECTORY "${_monitor_package_dir}")
+file(WRITE "${_monitor_package_dir}/monitorConfig.cmake.in" [==[
+if (TARGET monitor::watchdog_client__client)
+    return()
+endif ()
+set(_monitor_saved_kde "${ECOSYSTEM_PROFILE_KDE}")
+set(ECOSYSTEM_PROFILE_KDE "@ECOSYSTEM_PROFILE_KDE@")
+set(QT_MAJOR_VERSION 6)
+set(QT_DEFAULT_MAJOR_VERSION 6)
+find_package(Qt6 6.0 CONFIG REQUIRED COMPONENTS
+        Core
+)
+
+
+set(ECOSYSTEM_PROFILE_KDE "${_monitor_saved_kde}")
+unset(_monitor_saved_kde)
+
+include("${CMAKE_CURRENT_LIST_DIR}/monitorTargets.cmake")
+]==])
+configure_file("${_monitor_package_dir}/monitorConfig.cmake.in"
+               "${_monitor_package_dir}/monitorConfig.cmake" @ONLY)
+write_basic_package_version_file("${_monitor_package_dir}/monitorConfigVersion.cmake"
+                                VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+install(EXPORT monitorTargets NAMESPACE monitor::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/monitor")
+install(FILES "${_monitor_package_dir}/monitorConfig.cmake"
+              "${_monitor_package_dir}/monitorConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/monitor")
 
