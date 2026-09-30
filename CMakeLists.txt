@@ -139,11 +139,6 @@ target_include_directories(watchdog_contract__contract INTERFACE
 
 ecosystem_apply_defaults(watchdog_contract__contract)
 
-target_compile_definitions(watchdog_contract__contract
-        INTERFACE
-        ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
-)
-
 
 add_library(watchdog_platform__platform STATIC
     ${MONITOR_WATCHDOG_PLATFORM_PLATFORM_HEADERS}
@@ -166,7 +161,7 @@ set_target_properties(watchdog_platform__platform PROPERTIES OUTPUT_NAME monitor
 ecosystem_apply_defaults(watchdog_platform__platform)
 
 target_compile_definitions(watchdog_platform__platform
-        PUBLIC
+        PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
@@ -193,7 +188,7 @@ set_target_properties(watchdog_client__client PROPERTIES OUTPUT_NAME monitor_wat
 ecosystem_apply_defaults(watchdog_client__client)
 
 target_compile_definitions(watchdog_client__client
-        PUBLIC
+        PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
@@ -218,7 +213,7 @@ set_target_properties(watchdog_runtime__runtime PROPERTIES OUTPUT_NAME monitor_w
 ecosystem_apply_defaults(watchdog_runtime__runtime)
 
 target_compile_definitions(watchdog_runtime__runtime
-        PUBLIC
+        PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
@@ -243,7 +238,7 @@ set_target_properties(watchdog_console__console PROPERTIES OUTPUT_NAME monitor_w
 ecosystem_apply_defaults(watchdog_console__console)
 
 target_compile_definitions(watchdog_console__console
-        PUBLIC
+        PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
@@ -270,7 +265,7 @@ set_target_properties(watchdog_qt__qt PROPERTIES OUTPUT_NAME monitor_watchdog_qt
 ecosystem_apply_defaults(watchdog_qt__qt)
 
 target_compile_definitions(watchdog_qt__qt
-        PUBLIC
+        PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
 
