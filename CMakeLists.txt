@@ -62,6 +62,46 @@ function(ecosystem_apply_defaults target_name)
         )
     endif ()
 endfunction()
+function(ecosystem_stage_assets target_name)
+    file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/manifesto_assets_${target_name}_$<CONFIG>.cmake"
+            CONTENT [==[if (NOT IS_DIRECTORY "${asset_source}" OR IS_SYMLINK "${asset_source}")
+    message(FATAL_ERROR "Invalid runtime asset source: ${asset_source}")
+endif ()
+if (IS_SYMLINK "${asset_destination}" OR
+        (EXISTS "${asset_destination}" AND NOT IS_DIRECTORY "${asset_destination}"))
+    message(FATAL_ERROR "Invalid runtime asset destination: ${asset_destination}")
+endif ()
+foreach (category IN ITEMS brand reports dataset dumps sets templates)
+    if (IS_SYMLINK "${asset_source}/${category}" OR IS_SYMLINK "${asset_destination}/${category}")
+        message(FATAL_ERROR "Runtime asset category uses a symlink: ${category}")
+    endif ()
+    if (EXISTS "${asset_source}/${category}")
+        if (NOT IS_DIRECTORY "${asset_source}/${category}")
+            message(FATAL_ERROR "Runtime asset category is not a directory: ${category}")
+        endif ()
+        file(COPY "${asset_source}/${category}" DESTINATION "${asset_destination}")
+    endif ()
+endforeach ()
+# Retire media staged by older facades without following a directory alias.
+if (IS_SYMLINK "${asset_destination}/showcase")
+    file(REMOVE "${asset_destination}/showcase")
+else ()
+    file(REMOVE_RECURSE "${asset_destination}/showcase")
+endif ()
+]==]
+    )
+    add_custom_command(
+            TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+            "-Dasset_source=${CMAKE_CURRENT_SOURCE_DIR}/assets"
+            "-Dasset_destination=$<TARGET_FILE_DIR:${target_name}>/assets"
+            -P "${CMAKE_CURRENT_BINARY_DIR}/manifesto_assets_${target_name}_$<CONFIG>.cmake"
+            VERBATIM
+    )
+endfunction()
+
+
 
 set(MONITOR_WATCHDOG_CONTRACT_CONTRACT_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/shared_state.hpp
@@ -293,6 +333,8 @@ target_compile_definitions(watchdog_cli__cli
         PRIVATE
         ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
 )
+
+ecosystem_stage_assets(watchdog_cli__cli)
 
 
 # The visitor name is generated state; the selected target keeps its identity.
