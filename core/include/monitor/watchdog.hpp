@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_WATCHDOG_HPP
-#define CPPR_MONITOR_WATCHDOG_HPP
+#pragma once
 
 #include "monitor/platform/process_watch.hpp"
 #include "monitor/platform/shared_memory.hpp"
@@ -103,5 +102,3 @@ private:
 [[nodiscard]] const char* event_name(std::uint16_t value) noexcept;
 
 } // namespace monitor
-
-#endif // CPPR_MONITOR_WATCHDOG_HPP

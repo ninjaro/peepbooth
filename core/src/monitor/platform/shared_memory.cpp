@@ -62,7 +62,7 @@ void shared_mapping::reset() noexcept {
 }
 
 std::string shared_memory_name(const std::uint32_t pid) {
-    return "/cppr-watchdog-" + std::to_string(current_user_id()) + "-"
+    return "/monitor-watchdog-" + std::to_string(current_user_id()) + "-"
         + std::to_string(pid);
 }
 
@@ -133,7 +133,9 @@ std::optional<shared_mapping> open_process_mapping(const std::uint32_t pid) {
     if (descriptor < 0) {
         return std::nullopt;
     }
-    struct stat metadata {};
+
+    struct stat metadata { };
+
     if (::fstat(descriptor, &metadata) != 0
         || metadata.st_size != static_cast<off_t>(sizeof(shared_state))
         || metadata.st_uid != static_cast<uid_t>(current_user_id())) {

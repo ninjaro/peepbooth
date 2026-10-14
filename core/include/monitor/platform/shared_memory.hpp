@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_PLATFORM_SHARED_MEMORY_HPP
-#define CPPR_MONITOR_PLATFORM_SHARED_MEMORY_HPP
+#pragma once
 
 #include "monitor/shared_state.hpp"
 
@@ -25,8 +24,8 @@ public:
 private:
     friend std::optional<shared_mapping>
     create_process_mapping(std::string_view process_name);
-    friend std::optional<shared_mapping>
-    open_process_mapping(std::uint32_t pid);
+    friend std::optional<shared_mapping> open_process_mapping(std::uint32_t pid
+    );
 
     shared_state* state_ { nullptr };
     int descriptor_ { -1 };
@@ -46,5 +45,3 @@ open_process_mapping(std::uint32_t pid);
 [[nodiscard]] std::uint32_t current_user_id() noexcept;
 
 } // namespace monitor::platform
-
-#endif // CPPR_MONITOR_PLATFORM_SHARED_MEMORY_HPP

@@ -468,6 +468,11 @@ void test_observed_process_exit() {
 } // namespace
 
 int main() {
+    const auto name = monitor::platform::shared_memory_name(42);
+    check(
+        name.starts_with("/monitor-watchdog-") && name.ends_with("-42"),
+        "producer/watchdog endpoint uses the current Monitor identity"
+    );
     test_observation_owner();
     test_observed_process_exit();
     test_status_parser();

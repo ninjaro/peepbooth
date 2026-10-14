@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_PLATFORM_PROCESS_WATCH_HPP
-#define CPPR_MONITOR_PLATFORM_PROCESS_WATCH_HPP
+#pragma once
 
 #include <cstdint>
 #include <optional>
@@ -41,8 +40,8 @@ public:
     process_handle(process_handle&& other) noexcept;
     process_handle& operator=(process_handle&& other) noexcept;
 
-    [[nodiscard]] static std::optional<process_handle>
-    attach(std::uint32_t pid);
+    [[nodiscard]] static std::optional<process_handle> attach(std::uint32_t pid
+    );
     [[nodiscard]] bool alive() const;
     [[nodiscard]] bool wait_for_exit(int timeout_ms) const;
     [[nodiscard]] process_identity identity() const noexcept;
@@ -53,5 +52,3 @@ private:
 };
 
 } // namespace monitor::platform
-
-#endif // CPPR_MONITOR_PLATFORM_PROCESS_WATCH_HPP

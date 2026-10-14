@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_CONSOLE_WATCH_HPP
-#define CPPR_MONITOR_CONSOLE_WATCH_HPP
+#pragma once
 
 #include <atomic>
 #include <cstdint>
@@ -46,5 +45,3 @@ int run_console_watch(
 );
 
 } // namespace monitor
-
-#endif // CPPR_MONITOR_CONSOLE_WATCH_HPP

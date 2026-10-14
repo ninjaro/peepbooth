@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_CLIENT_HPP
-#define CPPR_MONITOR_CLIENT_HPP
+#pragma once
 
 #include "monitor/shared_state.hpp"
 
@@ -101,5 +100,3 @@ inline void record_breadcrumb(
 }
 
 } // namespace monitor
-
-#endif // CPPR_MONITOR_CLIENT_HPP

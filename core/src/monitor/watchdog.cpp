@@ -70,8 +70,8 @@ watchdog_session::~watchdog_session() { release(); }
 watchdog_session::watchdog_session(watchdog_session&& other) noexcept
     : mapping_(std::move(other.mapping_)) { }
 
-watchdog_session&
-watchdog_session::operator=(watchdog_session&& other) noexcept {
+watchdog_session& watchdog_session::operator=(watchdog_session&& other
+) noexcept {
     if (this != &other) {
         release();
         mapping_ = std::move(other.mapping_);

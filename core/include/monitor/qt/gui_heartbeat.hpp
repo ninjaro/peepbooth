@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_QT_GUI_HEARTBEAT_HPP
-#define CPPR_MONITOR_QT_GUI_HEARTBEAT_HPP
+#pragma once
 
 #include <QObject>
 #include <QTimer>
@@ -23,5 +22,3 @@ namespace qt {
 
 } // namespace qt
 } // namespace monitor
-
-#endif // CPPR_MONITOR_QT_GUI_HEARTBEAT_HPP

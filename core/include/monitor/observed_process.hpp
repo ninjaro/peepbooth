@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_OBSERVED_PROCESS_HPP
-#define CPPR_MONITOR_OBSERVED_PROCESS_HPP
+#pragma once
 
 #include "monitor/watchdog.hpp"
 
@@ -62,5 +61,3 @@ private:
 };
 
 } // namespace monitor
-
-#endif // CPPR_MONITOR_OBSERVED_PROCESS_HPP

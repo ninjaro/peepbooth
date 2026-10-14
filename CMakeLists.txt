@@ -182,8 +182,10 @@ endfunction()
 
 function(ecosystem_stage_assets target_name)
     file(GENERATE
-            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/manifesto_assets_${target_name}_$<CONFIG>.cmake"
-            CONTENT [==[# Runtime ownership is independent of Git: reserved cache directories are never
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ecosystem_assets_${target_name}_$<CONFIG>.cmake"
+            CONTENT [==[# Script mode has its own policy scope; it does not inherit the project policy.
+cmake_minimum_required(VERSION 3.20)
+# Runtime ownership is independent of Git: reserved cache directories are never
 # payloads, while other authored/source-generated files keep their category paths.
 function(_ecosystem_asset_cache_directory path result)
     if ("${path}" MATCHES [=[(^|/)(\.cache|\.[^/]*_cache)(/|$)]=])
@@ -308,6 +310,16 @@ if (IS_SYMLINK "${asset_destination}" OR
         (EXISTS "${asset_destination}" AND NOT IS_DIRECTORY "${asset_destination}"))
     message(FATAL_ERROR "Invalid runtime asset destination: ${asset_destination}")
 endif ()
+# Executables beside one another share this output. configure_file replaces
+# destination files, so parallel post-build scripts must not copy or prune the
+# same tree concurrently. The process lock is destination-local and
+# lives beside the payload, not inside it; unrelated destinations stay parallel.
+get_filename_component(asset_destination "${asset_destination}" ABSOLUTE)
+set(asset_lock "${asset_destination}.lock")
+if (IS_SYMLINK "${asset_lock}" OR IS_DIRECTORY "${asset_lock}")
+    message(FATAL_ERROR "Invalid runtime asset staging lock: ${asset_lock}")
+endif ()
+file(LOCK "${asset_lock}" GUARD PROCESS)
 foreach (category IN ITEMS brand reports dataset dumps sets templates)
     if (IS_SYMLINK "${asset_source}/${category}" OR IS_SYMLINK "${asset_destination}/${category}")
         message(FATAL_ERROR "Runtime asset category uses a symlink: ${category}")
@@ -346,13 +358,13 @@ endif ()
     # A new staging policy must take effect even if application sources did not
     # change. Native Make/Ninja link rules depend on the generated script.
     set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS
-            "${CMAKE_CURRENT_BINARY_DIR}/manifesto_assets_${target_name}_$<CONFIG>.cmake")
+            "${CMAKE_CURRENT_BINARY_DIR}/ecosystem_assets_${target_name}_$<CONFIG>.cmake")
     add_custom_command(
             TARGET ${target_name} POST_BUILD
             COMMAND ${CMAKE_COMMAND}
             "-Dasset_source=${CMAKE_CURRENT_SOURCE_DIR}/assets"
             "-Dasset_destination=$<TARGET_FILE_DIR:${target_name}>/assets"
-            -P "${CMAKE_CURRENT_BINARY_DIR}/manifesto_assets_${target_name}_$<CONFIG>.cmake"
+            -P "${CMAKE_CURRENT_BINARY_DIR}/ecosystem_assets_${target_name}_$<CONFIG>.cmake"
             VERBATIM
     )
 endfunction()
@@ -596,21 +608,21 @@ ecosystem_stage_assets(watchdog_cli__cli)
 # The visitor name is generated state; the selected target keeps its identity.
 # Retire a previous link/copy before a new selection can build at the same path.
 foreach(facade_name mvp mvp.exe)
-    if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${facade_name}.owned")
+    if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ecosystem-${facade_name}.owned")
         file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/${facade_name}"
-                    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${facade_name}.owned")
+                    "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ecosystem-${facade_name}.owned")
     endif()
 endforeach()
 
-get_target_property(MANIFESTO_FACADE_TYPE watchdog_cli__cli TYPE)
-if(MANIFESTO_FACADE_TYPE STREQUAL "EXECUTABLE" AND NOT ANDROID)
+get_target_property(ECOSYSTEM_FACADE_TYPE watchdog_cli__cli TYPE)
+if(ECOSYSTEM_FACADE_TYPE STREQUAL "EXECUTABLE" AND NOT ANDROID)
     if(WIN32)
-        set(MANIFESTO_FACADE_NAME mvp.exe)
+        set(ECOSYSTEM_FACADE_NAME mvp.exe)
     else()
-        set(MANIFESTO_FACADE_NAME mvp)
+        set(ECOSYSTEM_FACADE_NAME mvp)
     endif()
     file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-facade-$<CONFIG>.cmake"
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ecosystem-facade-$<CONFIG>.cmake"
         CONTENT [=[
 set(source "$<TARGET_FILE:watchdog_cli__cli>")
 set(destination "${FACADE_DIR}/${FACADE_NAME}")
@@ -623,18 +635,18 @@ else()
     file(RELATIVE_PATH relative "${FACADE_DIR}" "${source}")
     file(CREATE_LINK "${relative}" "${destination}" SYMBOLIC)
 endif()
-file(WRITE "${FACADE_DIR}/CMakeFiles/manifesto-${FACADE_NAME}.owned" "generated\n")
+file(WRITE "${FACADE_DIR}/CMakeFiles/ecosystem-${FACADE_NAME}.owned" "generated\n")
 ]=])
-    add_custom_target(_manifesto_visitor_facade_monitor ALL
+    add_custom_target(_ecosystem_visitor_facade_monitor ALL
         COMMAND "${CMAKE_COMMAND}"
             "-DFACADE_DIR=${CMAKE_CURRENT_BINARY_DIR}"
-            "-DFACADE_NAME=${MANIFESTO_FACADE_NAME}"
-            -P "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-facade-$<CONFIG>.cmake"
+            "-DFACADE_NAME=${ECOSYSTEM_FACADE_NAME}"
+            -P "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ecosystem-facade-$<CONFIG>.cmake"
         DEPENDS watchdog_cli__cli
         VERBATIM)
     set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_CLEAN_FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/${MANIFESTO_FACADE_NAME}"
-        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/manifesto-${MANIFESTO_FACADE_NAME}.owned")
+        "${CMAKE_CURRENT_BINARY_DIR}/${ECOSYSTEM_FACADE_NAME}"
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ecosystem-${ECOSYSTEM_FACADE_NAME}.owned")
 endif()
 
 install(TARGETS watchdog_contract__contract EXPORT monitorTargets

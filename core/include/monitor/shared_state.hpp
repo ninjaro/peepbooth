@@ -1,5 +1,4 @@
-#ifndef CPPR_MONITOR_SHARED_STATE_HPP
-#define CPPR_MONITOR_SHARED_STATE_HPP
+#pragma once
 
 #include <array>
 #include <atomic>
@@ -94,5 +93,3 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
 } // namespace monitor
-
-#endif // CPPR_MONITOR_SHARED_STATE_HPP
