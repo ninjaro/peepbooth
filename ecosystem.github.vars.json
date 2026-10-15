@@ -1,8 +1,9 @@
 {
-  "manifesto_repository": "ninjaro/ecosystem",
-  "manifesto_ref": "b646833b17ff1e5036a6fd8a6d7e75bdb1eb9914",
-  "manifesto_setup_action": "./.github/actions/setup-integrated-toolchain",
-  "manifesto_build_parallelism": "2",
+  "ecosystem_repository": "ninjaro/ecosystem",
+  "ecosystem_ref": "b646833b17ff1e5036a6fd8a6d7e75bdb1eb9914",
+  "ecosystem_source_path": ".",
+  "ecosystem_setup_action": "./.github/actions/setup-ecosystem",
+  "ecosystem_build_parallelism": "2",
   "sphinx_theme": "sphinx_rtd_theme",
   "sphinx_theme_package": "sphinx-rtd-theme",
   "checkout_action": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
