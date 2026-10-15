@@ -8,8 +8,7 @@
 
 namespace monitor {
 
-inline constexpr std::uint64_t shared_state_magic = 0x4350505257444f47ULL;
-inline constexpr std::uint16_t shared_state_version = 1;
+inline constexpr std::uint64_t shared_state_magic = 0x4d4f4e49544f5221ULL;
 inline constexpr std::size_t heartbeat_channel_count = 4;
 inline constexpr std::size_t breadcrumb_capacity = 128;
 inline constexpr std::size_t process_name_capacity = 32;
@@ -63,7 +62,6 @@ struct breadcrumb_slot {
 
 struct shared_state {
     std::uint64_t magic { shared_state_magic };
-    std::uint16_t version { shared_state_version };
     std::uint16_t header_size {};
     std::uint32_t total_size {};
     std::uint32_t pid {};

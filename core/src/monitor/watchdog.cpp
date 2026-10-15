@@ -13,7 +13,6 @@ namespace {
         const shared_state& state, const platform::process_identity identity
     ) noexcept {
         return state.magic == shared_state_magic
-            && state.version == shared_state_version
             && state.header_size == offsetof(shared_state, heartbeats)
             && state.total_size == sizeof(shared_state)
             && state.pid == identity.pid

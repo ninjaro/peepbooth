@@ -221,6 +221,14 @@ void test_client_and_ring() {
                 == 0,
         "disconnected breadcrumb path is inert"
     );
+    if (raw) {
+        raw->get()->magic = 0x4350505257444f47ULL;
+        check(
+            !monitor::watchdog_session::attach(*identity),
+            "obsolete shared state is rejected"
+        );
+        raw->get()->magic = monitor::shared_state_magic;
+    }
     auto watcher = monitor::watchdog_session::attach(*identity);
     check(watcher.has_value(), "attach compatible watcher");
     if (!watcher) {

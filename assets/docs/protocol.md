@@ -3,12 +3,12 @@
 The current contract is a local, same-user, fixed-size shared-memory layout. It
 is not JSON, a network protocol, or an application metrics schema.
 
-## Identity and version
+## Identity and layout
 
 A producer creates `/monitor-watchdog-<uid>-<pid>` with mode `0600`. The
 header contains:
 
-- 64-bit magic and 16-bit version;
+- 64-bit magic;
 - header and total structure sizes;
 - PID, UID, and Linux process-start ticks;
 - a bounded 32-byte process name;
@@ -17,15 +17,15 @@ header contains:
 
 The watcher verifies all identity and size fields before enabling publication.
 Process-start ticks prevent accidental attachment after PID reuse. A binary
-layout change increments `shared_state_version`; there is no permissive
-best-effort decoding.
+layout has no version field or historical reader. Producers and watchers must
+be rebuilt together; unrelated or obsolete mappings are rejected rather than decoded.
 
 ## Frequently updated state
 
 Four heartbeat slots correspond to `main`, `gui`, `core`, and `worker`.
 Each holds active state, monotonic timestamp, and sequence.
 
-Version 1 currently assigns breadcrumb IDs 10 (`configuration_loaded`), 12
+The current layout assigns breadcrumb IDs 10 (`configuration_loaded`), 12
 (`output_ready`), 22 (`stream_started`), and 23 (`stream_stopped`). Numeric gaps
 are intentional; removing an obsolete producer probe does not change the
 fixed structure layout. Unknown IDs remain safe to read.
@@ -59,5 +59,5 @@ stale classification remains watcher-side policy.
 Only the current binary layout is accepted. Configuration, preferences and
 application recovery formats are separate from this diagnostic layout.
 
-The current magic is `0x4350505257444f47`. It is a discriminator, not a legacy
-format adapter; producer and watcher must agree on magic, layout and version.
+The current magic is `0x4d4f4e49544f5221` (`MONITOR!`). Producer and watcher
+must agree on the discriminator, structure sizes and exact process identity.
