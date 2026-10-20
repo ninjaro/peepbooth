@@ -1,6 +1,7 @@
 #include "monitor/console_watch.hpp"
 
 #include "monitor/observed_process.hpp"
+#include "monitor/process_discovery.hpp"
 #include "monitor/watchdog.hpp"
 
 #include <charconv>
@@ -96,6 +97,10 @@ void write_console_observation(
 parsed_command_line
 parse_command_line(const std::span<const std::string_view> arguments) noexcept {
     parsed_command_line parsed;
+    if (arguments.size() == 1 && arguments.front() == "--list") {
+        parsed.action = command_line_action::list;
+        return parsed;
+    }
     parsed.action = command_line_action::run;
     for (std::size_t index = 0; index < arguments.size(); ++index) {
         const std::string_view argument = arguments[index];
@@ -137,7 +142,28 @@ parse_command_line(const std::span<const std::string_view> arguments) noexcept {
 
 void write_console_usage(std::ostream& output) {
     output << "usage: monitor --pid PID [--interval-ms N] [--stale-ms N] "
-              "[--once]\n";
+              "[--once]\n       monitor --list\n";
+}
+
+int run_console_list(std::ostream& output, std::ostream& error) {
+    const auto inventory = discover_processes();
+    if (inventory.available) {
+        output << "PID\tSTART_TICKS\tNAME\n";
+        for (const auto& process : inventory.processes) {
+            auto name = process.name;
+            for (auto& character : name) {
+                const auto byte = static_cast<unsigned char>(character);
+                if (byte < 0x20U || byte == 0x7fU)
+                    character = '?';
+            }
+            output << process.identity.pid << '\t'
+                   << process.identity.start_ticks << '\t' << std::quoted(name)
+                   << '\n';
+        }
+    }
+    for (const auto& diagnostic : inventory.diagnostics)
+        error << "monitor: " << diagnostic << '\n';
+    return inventory.available && inventory.diagnostics.empty() ? 0 : 1;
 }
 
 int run_console_watch(

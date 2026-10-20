@@ -37,10 +37,20 @@ bytes:
 timestamp_ns, event_id, flags, source_id, arg0, arg1
 ```
 
-Writers reserve a monotonically increasing ticket, mark the target slot
-in-progress, write its atomic numeric payload, then commit it. Readers accept a
-slot only when ticket and commit values are stable before and after the read.
-Overwrite is intentional bounded behavior.
+Writers reserve a monotonically increasing ticket and make one atomic attempt
+to claim its slot. A busy slot or an equal/newer committed ticket rejects the
+publication; writers never wait or retry. The owner marks the slot in-progress,
+writes its atomic numeric payload, then commits it. A release fence after the
+claim and an acquire fence before the reader's final commit check prevent a
+replacement payload from being accepted with the preceding commit. Readers
+accept only a matching ticket and stable completed commit.
+
+This is a bounded, best-effort diagnostic ring: completed older records may be
+overwritten, contended publications are dropped, and ticket gaps are valid. A
+stalled owner can prevent reuse of its slot; other slots continue independently.
+Commit encoding supports positive tickets through `2^63 - 1`; publication rejects
+zero or exhausted tickets rather than aliasing old commits. No delivery or
+per-record latency guarantee is implied.
 
 Human-readable channel/event names exist only in Monitor-side lookup functions.
 Unknown event IDs remain safe and display as `unknown`.

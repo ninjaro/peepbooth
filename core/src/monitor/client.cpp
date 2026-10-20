@@ -1,4 +1,5 @@
 #include "monitor/client.hpp"
+#include "breadcrumb_ring.hpp"
 
 #include "monitor/platform/shared_memory.hpp"
 
@@ -40,6 +41,9 @@ bool client::start(const std::string_view process_name) {
             return false;
         }
         implementation_->mapping = std::move(*mapping);
+        for (auto& deadline : implementation_->next_heartbeat_ns) {
+            deadline.store(0, std::memory_order_relaxed);
+        }
         state_.store(implementation_->mapping.get(), std::memory_order_release);
         return true;
     } catch (...) {
@@ -156,24 +160,15 @@ void client::breadcrumb(
 
     const std::uint64_t ticket
         = state->breadcrumb_ticket.fetch_add(1, std::memory_order_relaxed) + 1;
-    breadcrumb_slot& slot
-        = state->breadcrumbs[(ticket - 1) % breadcrumb_capacity];
-    // The odd value closes the slot to readers before any payload field is
-    // changed.  Sequential consistency is deliberate here: breadcrumbs are
-    // infrequent and the stronger ordering keeps this inter-process seqlock
-    // straightforward on architectures weaker than x86.
-    slot.commit.store((ticket << 1U) | 1U, std::memory_order_seq_cst);
-    slot.ticket.store(ticket, std::memory_order_relaxed);
-    slot.timestamp_ns.store(now, std::memory_order_relaxed);
-    slot.arg0.store(arg0, std::memory_order_relaxed);
-    slot.arg1.store(arg1, std::memory_order_relaxed);
-    slot.source_id.store(source_id, std::memory_order_relaxed);
-    slot.event_and_flags.store(
-        static_cast<std::uint32_t>(event_id)
-            | (static_cast<std::uint32_t>(flags) << 16U),
-        std::memory_order_relaxed
-    );
-    slot.commit.store(ticket << 1U, std::memory_order_seq_cst);
+    static_cast<void>(detail::publish_breadcrumb(
+        *state, ticket,
+        { .timestamp_ns = now,
+          .event_id = event_id,
+          .flags = flags,
+          .source_id = source_id,
+          .arg0 = arg0,
+          .arg1 = arg1 }
+    ));
 }
 
 client& client::process() noexcept {

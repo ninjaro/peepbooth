@@ -23,6 +23,9 @@ public:
     client(const client&) = delete;
     client& operator=(const client&) = delete;
 
+    // One lifecycle owner starts before producers, then stops/joins all
+    // producers before stop() or destruction. Publication may be concurrent;
+    // unmapping concurrently with publication is unsupported.
     [[nodiscard]] bool start(std::string_view process_name);
     void stop() noexcept;
     [[nodiscard]] bool available() const noexcept;

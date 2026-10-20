@@ -15,17 +15,6 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif ()
 
-set(QT_MAJOR_VERSION 6)
-set(QT_DEFAULT_MAJOR_VERSION 6)
-find_package(Qt6 6.0 CONFIG REQUIRED COMPONENTS
-        Core
-)
-
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
-
-
 function(ecosystem_apply_defaults target_name)
     get_target_property(target_type ${target_name} TYPE)
     set(target_scope PRIVATE)
@@ -385,13 +374,16 @@ set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_HEADERS
 set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/process_watch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory_inspection.cpp
 )
 set(MONITOR_WATCHDOG_PLATFORM_PLATFORM_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/process_watch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/platform/shared_memory_inspection.cpp
 )
 set(MONITOR_WATCHDOG_CLIENT_CLIENT_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/client.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/breadcrumb_ring.hpp
 )
 set(MONITOR_WATCHDOG_CLIENT_CLIENT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/client.cpp
@@ -400,15 +392,21 @@ set(MONITOR_WATCHDOG_CLIENT_CLIENT_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/client.cpp
 )
 set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_HEADERS
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/observation_registry.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/observed_process.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/process_discovery.hpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/watchdog.hpp
 )
 set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observation_registry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observed_process.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/process_discovery.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
 )
 set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_RUNTIME_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observation_registry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/observed_process.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/process_discovery.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/watchdog.cpp
 )
 set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_HEADERS
@@ -419,15 +417,6 @@ set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_SOURCES
 )
 set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch.cpp
-)
-set(MONITOR_WATCHDOG_QT_QT_HEADERS
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/qt/gui_heartbeat.hpp
-)
-set(MONITOR_WATCHDOG_QT_QT_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/qt/gui_heartbeat.cpp
-)
-set(MONITOR_WATCHDOG_QT_QT_RUNTIME_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/qt/gui_heartbeat.cpp
 )
 set(MONITOR_WATCHDOG_CLI_CLI_HEADERS
 )
@@ -551,33 +540,6 @@ target_compile_definitions(watchdog_console__console
 )
 
 
-add_library(watchdog_qt__qt STATIC
-    ${MONITOR_WATCHDOG_QT_QT_HEADERS}
-    ${MONITOR_WATCHDOG_QT_QT_SOURCES}
-)
-
-target_compile_features(watchdog_qt__qt PUBLIC cxx_std_20)
-
-target_include_directories(watchdog_qt__qt PUBLIC
-    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>"
-    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
-)
-
-target_link_libraries(watchdog_qt__qt PUBLIC
-    Qt6::Core
-    watchdog_client__client
-)
-
-set_target_properties(watchdog_qt__qt PROPERTIES OUTPUT_NAME monitor_watchdog_qt)
-
-ecosystem_apply_defaults(watchdog_qt__qt)
-
-target_compile_definitions(watchdog_qt__qt
-        PRIVATE
-        ECOSYSTEM_PROJECT_VERSION="${PROJECT_VERSION}"
-)
-
-
 add_executable(watchdog_cli__cli
     ${MONITOR_WATCHDOG_CLI_CLI_HEADERS}
     ${MONITOR_WATCHDOG_CLI_CLI_RUNTIME_SOURCES}
@@ -675,14 +637,6 @@ install(TARGETS watchdog_client__client EXPORT monitorTargets
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/client.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor")
 
-install(TARGETS watchdog_qt__qt EXPORT monitorTargets
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
-
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/qt/gui_heartbeat.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/monitor/qt")
-
 install(TARGETS watchdog_cli__cli
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -698,13 +652,6 @@ if (TARGET monitor::watchdog_client__client)
 endif ()
 set(_monitor_saved_kde "${ECOSYSTEM_PROFILE_KDE}")
 set(ECOSYSTEM_PROFILE_KDE "@ECOSYSTEM_PROFILE_KDE@")
-set(QT_MAJOR_VERSION 6)
-set(QT_DEFAULT_MAJOR_VERSION 6)
-find_package(Qt6 6.0 CONFIG REQUIRED COMPONENTS
-        Core
-)
-
-
 set(ECOSYSTEM_PROFILE_KDE "${_monitor_saved_kde}")
 unset(_monitor_saved_kde)
 

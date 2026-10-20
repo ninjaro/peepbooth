@@ -9,17 +9,6 @@
 namespace monitor {
 namespace {
 
-    bool valid_state(
-        const shared_state& state, const platform::process_identity identity
-    ) noexcept {
-        return state.magic == shared_state_magic
-            && state.header_size == offsetof(shared_state, heartbeats)
-            && state.total_size == sizeof(shared_state)
-            && state.pid == identity.pid
-            && state.uid == platform::current_user_id()
-            && state.process_start_ticks == identity.start_ticks;
-    }
-
     heartbeat_snapshot
     read_heartbeat(const heartbeat_slot& slot, const channel id) noexcept {
         heartbeat_snapshot result;
@@ -57,6 +46,7 @@ namespace {
             .arg0 = slot.arg0.load(std::memory_order_relaxed),
             .arg1 = slot.arg1.load(std::memory_order_relaxed),
         };
+        std::atomic_thread_fence(std::memory_order_acquire);
         return slot.commit.load(std::memory_order_seq_cst) == expected
             ? std::optional(result)
             : std::nullopt;
@@ -81,7 +71,7 @@ watchdog_session& watchdog_session::operator=(watchdog_session&& other
 std::optional<watchdog_session>
 watchdog_session::attach(const platform::process_identity identity) {
     auto mapping = platform::open_process_mapping(identity.pid);
-    if (!mapping || !valid_state(*mapping->get(), identity)) {
+    if (!mapping || !platform::matches_process(*mapping->get(), identity)) {
         return std::nullopt;
     }
     watchdog_session result;
@@ -199,7 +189,7 @@ memory_trend_summary memory_trend::summary() const noexcept {
     // high-water threshold.  Requiring mostly nondecreasing samples, repeated
     // positive steps in both halves of a minimum observation period, avoids
     // treating startup allocations followed by a plateau as sustained growth.
-    const double origin = static_cast<double>(points_.front().timestamp_ns);
+    const auto origin = static_cast<double>(points_.front().timestamp_ns);
     double sum_x = 0;
     double sum_y = 0;
     for (const auto& sample_point : points_) {
@@ -207,7 +197,7 @@ memory_trend_summary memory_trend::summary() const noexcept {
             += (static_cast<double>(sample_point.timestamp_ns) - origin) / 1e9;
         sum_y += static_cast<double>(sample_point.rss_bytes);
     }
-    const double count = static_cast<double>(points_.size());
+    const auto count = static_cast<double>(points_.size());
     const double mean_x = sum_x / count;
     const double mean_y = sum_y / count;
     double numerator = 0;
@@ -217,7 +207,7 @@ memory_trend_summary memory_trend::summary() const noexcept {
     for (std::size_t index = 0; index < points_.size(); ++index) {
         const double x
             = (static_cast<double>(points_[index].timestamp_ns) - origin) / 1e9;
-        const double y = static_cast<double>(points_[index].rss_bytes);
+        const auto y = static_cast<double>(points_[index].rss_bytes);
         numerator += (x - mean_x) * (y - mean_y);
         denominator += (x - mean_x) * (x - mean_x);
         if (index != 0

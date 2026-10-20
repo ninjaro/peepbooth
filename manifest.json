@@ -27,7 +27,8 @@
         "include/monitor/platform/process_watch.hpp",
         "src/monitor/platform/process_watch.cpp",
         "include/monitor/platform/shared_memory.hpp",
-        "src/monitor/platform/shared_memory.cpp"
+        "src/monitor/platform/shared_memory.cpp",
+        "src/monitor/platform/shared_memory_inspection.cpp"
       ],
       "dependencies": [
         "watchdog_contract:contract"
@@ -40,6 +41,7 @@
       "root": "core",
       "owns": [
         "include/monitor/client.hpp",
+        "src/monitor/breadcrumb_ring.hpp",
         "src/monitor/client.cpp"
       ],
       "dependencies": [
@@ -56,7 +58,11 @@
         "include/monitor/watchdog.hpp",
         "src/monitor/watchdog.cpp",
         "include/monitor/observed_process.hpp",
-        "src/monitor/observed_process.cpp"
+        "src/monitor/observed_process.cpp",
+        "include/monitor/process_discovery.hpp",
+        "src/monitor/process_discovery.cpp",
+        "include/monitor/observation_registry.hpp",
+        "src/monitor/observation_registry.cpp"
       ],
       "dependencies": [
         "watchdog_client:client"
@@ -104,6 +110,19 @@
       "entry": "src/main.cpp",
       "dependencies": [
         "watchdog_console:console"
+      ]
+    },
+    {
+      "id": "watchdog_benchmarks:benchmarks",
+      "kind": "exe",
+      "name": "monitor_instrumentation_benchmarks",
+      "root": "core",
+      "owns": [
+        "benchmarks/monitor/instrumentation_benchmarks.cpp"
+      ],
+      "entry": "benchmarks/monitor/instrumentation_benchmarks.cpp",
+      "dependencies": [
+        "watchdog_runtime:runtime"
       ]
     },
     {

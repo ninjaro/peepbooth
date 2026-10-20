@@ -1,5 +1,6 @@
 #pragma once
 
+#include "monitor/platform/process_watch.hpp"
 #include "monitor/shared_state.hpp"
 
 #include <cstdint>
@@ -8,6 +9,18 @@
 #include <string_view>
 
 namespace monitor::platform {
+
+struct process_endpoint {
+    process_identity identity;
+    std::string name;
+};
+
+[[nodiscard]] bool
+matches_process(const shared_state& state, process_identity identity) noexcept;
+
+// Opens a read-only mapping, never acquires a watcher lease or unlinks a name.
+[[nodiscard]] std::optional<process_endpoint>
+inspect_process_mapping(std::uint32_t pid, std::string* error_message);
 
 class shared_mapping final {
 public:
@@ -26,6 +39,8 @@ private:
     create_process_mapping(std::string_view process_name);
     friend std::optional<shared_mapping> open_process_mapping(std::uint32_t pid
     );
+    friend std::optional<process_endpoint>
+    inspect_process_mapping(std::uint32_t pid, std::string* error_message);
 
     shared_state* state_ { nullptr };
     int descriptor_ { -1 };

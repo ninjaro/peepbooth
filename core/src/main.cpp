@@ -33,6 +33,9 @@ int main(int argc, char** argv) {
         monitor::write_console_usage(std::cerr);
         return 2;
     }
+    if (parsed.action == monitor::command_line_action::list) {
+        return monitor::run_console_list(std::cout, std::cerr);
+    }
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);

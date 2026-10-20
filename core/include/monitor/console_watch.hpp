@@ -19,6 +19,7 @@ struct console_options {
 
 enum class command_line_action {
     run,
+    list,
     help,
     error,
 };
@@ -32,6 +33,8 @@ struct parsed_command_line {
 parse_command_line(std::span<const std::string_view> arguments) noexcept;
 
 void write_console_usage(std::ostream& output);
+
+int run_console_list(std::ostream& output, std::ostream& error);
 
 // Formats only the supplied observation; performs no clock, process or IPC
 // reads.

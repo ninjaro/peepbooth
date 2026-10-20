@@ -1,18 +1,28 @@
+#include "../../src/monitor/breadcrumb_ring.hpp"
 #include "monitor/client.hpp"
 #include "monitor/console_watch.hpp"
+#include "monitor/observation_registry.hpp"
 #include "monitor/observed_process.hpp"
 #include "monitor/platform/process_watch.hpp"
 #include "monitor/platform/shared_memory.hpp"
+#include "monitor/process_discovery.hpp"
 #include "monitor/watchdog.hpp"
 
+#include <algorithm>
 #include <array>
+#include <barrier>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #if defined(__linux__) && !defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -24,7 +34,7 @@ struct observed_process_test_access {
         watchdog_snapshot snapshot, const std::uint64_t now
     ) {
         owner.clock_ticks_per_second_ = 100;
-        return owner.accept_sample(std::move(sample), std::move(snapshot), now);
+        return owner.accept_sample(sample, std::move(snapshot), now);
     }
 };
 } // namespace monitor
@@ -78,6 +88,21 @@ void test_command_line_parser() {
         monitor::parse_command_line(help).action
             == monitor::command_line_action::help,
         "help has a distinct command-line result"
+    );
+
+    constexpr std::array list { std::string_view { "--list" } };
+    check(
+        monitor::parse_command_line(list).action
+            == monitor::command_line_action::list,
+        "read-only list selection does not require PID"
+    );
+    constexpr std::array mixed { std::string_view { "--list" },
+                                 std::string_view { "--pid" },
+                                 std::string_view { "42" } };
+    check(
+        monitor::parse_command_line(mixed).action
+            == monitor::command_line_action::error,
+        "list and observation selections cannot be combined"
     );
 
     constexpr std::array invalid {
@@ -200,6 +225,18 @@ void test_client_and_ring() {
         check(
             !disabled_client.start("watchdog-tests"),
             "instrumentation is inert in unsupported builds"
+        );
+        check(
+            !monitor::start_process("disabled-public-api"),
+            "disabled public startup does not construct the process client"
+        );
+        monitor::heartbeat(monitor::channel::core);
+        monitor::record_breadcrumb(monitor::event::stream_stopped);
+        check(
+            !monitor::platform::open_process_mapping(
+                monitor::platform::current_process_id()
+            ),
+            "disabled public calls create no endpoint"
         );
         return;
     }
@@ -400,6 +437,97 @@ void test_observation_owner() {
 #endif
 }
 
+void test_client_lifecycle() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    if constexpr (!monitor::instrumentation_enabled)
+        return;
+    const auto identity = monitor::platform::read_process_identity(
+        monitor::platform::current_process_id()
+    );
+    check(identity.has_value(), "lifecycle process identity");
+    if (!identity)
+        return;
+    monitor::client producer;
+    producer.stop();
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        check(producer.start("lifecycle"), "start producer incarnation");
+        check(producer.start("ignored"), "start is idempotent while running");
+        auto watcher = monitor::watchdog_session::attach(*identity);
+        check(watcher.has_value(), "attach lifecycle watcher");
+        if (!watcher)
+            return;
+        producer.heartbeat(monitor::channel::main);
+        check(
+            watcher->snapshot().heartbeats[0].sequence == 1,
+            "new mapping publishes its first heartbeat without an old throttle"
+        );
+        // Workers finish all instrumentation before the lifecycle owner stops.
+        // The barrier orders attachment before work without scheduler sleeps.
+        std::barrier ready(5);
+        std::array<std::jthread, 4> workers;
+        for (std::size_t index = 0; index < workers.size(); ++index) {
+            workers[index] = std::jthread([&producer, &ready, index] {
+                ready.arrive_and_wait();
+                producer.heartbeat(monitor::channel::worker);
+                producer.breadcrumb(
+                    monitor::event::stream_stopped,
+                    static_cast<std::uint32_t>(index), index
+                );
+            });
+        }
+        ready.arrive_and_wait();
+        for (auto& worker : workers)
+            worker.join();
+        check(
+            watcher->snapshot().breadcrumbs.size() == workers.size(),
+            "joined workers publish complete bounded records"
+        );
+        watcher->release();
+        auto raw = monitor::platform::open_process_mapping(identity->pid);
+        check(raw.has_value(), "watcher detach preserves producer endpoint");
+        if (!raw)
+            return;
+        const auto ticket = raw->get()->breadcrumb_ticket.load();
+        producer.breadcrumb(monitor::event::output_ready);
+        check(
+            raw->get()->breadcrumb_ticket.load() == ticket,
+            "detached publication has no retained backlog"
+        );
+        watcher = monitor::watchdog_session::attach(*identity);
+        check(watcher.has_value(), "watcher reattaches to running producer");
+        if (!watcher)
+            return;
+        watcher->renew_lease(0, 0);
+        producer.breadcrumb(monitor::event::output_ready);
+        check(
+            raw->get()->watcher_present.load() == 0
+                && raw->get()->breadcrumb_ticket.load() == ticket,
+            "expired lease stops publication without a sleep"
+        );
+        watcher->renew_lease(monitor::platform::monotonic_time_ns());
+        producer.breadcrumb(monitor::event::output_ready);
+        check(
+            raw->get()->breadcrumb_ticket.load() == ticket + 1,
+            "renewed observer resumes current publication"
+        );
+        producer.stop();
+        producer.stop();
+        check(!producer.available(), "repeated stop is inert");
+        check(
+            watcher->snapshot().process_lifecycle
+                == monitor::lifecycle::clean_exit,
+            "observer retains final clean exit after producer unmaps"
+        );
+        check(
+            !monitor::platform::open_process_mapping(identity->pid),
+            "only producer teardown removes its endpoint"
+        );
+        producer.heartbeat(monitor::channel::worker);
+        producer.breadcrumb(monitor::event::stream_stopped);
+    }
+#endif
+}
+
 void test_observed_process_exit() {
 #if defined(__linux__) && !defined(__ANDROID__)
     if constexpr (!monitor::instrumentation_enabled) {
@@ -473,6 +601,551 @@ void test_observed_process_exit() {
 #endif
 }
 
+void test_process_discovery() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    auto mapping = monitor::platform::create_process_mapping("discovery\nname");
+    check(
+        mapping.has_value(),
+        "create discovery endpoint independently of client build mode"
+    );
+    if (!mapping)
+        return;
+    const auto pid = monitor::platform::current_process_id();
+    const auto identity = monitor::platform::read_process_identity(pid);
+    check(identity.has_value(), "read discovery process identity");
+    if (!identity)
+        return;
+    auto watcher = monitor::watchdog_session::attach(*identity);
+    check(watcher.has_value(), "attach existing observer before discovery");
+    if (!watcher)
+        return;
+    auto& state = *mapping->get();
+    const auto lease = state.watcher_lease_until_ns.load();
+    std::string reason;
+    const auto inspected
+        = monitor::platform::inspect_process_mapping(pid, &reason);
+    check(
+        inspected && reason.empty()
+            && inspected->identity.start_ticks == identity->start_ticks
+            && inspected->name == "discovery\nname",
+        "read-only inspection retains exact identity and bounded name"
+    );
+    const auto original_ticks = state.process_start_ticks;
+    state.process_start_ticks = original_ticks + 1;
+    check(
+        !monitor::platform::inspect_process_mapping(pid, &reason)
+            && reason.find("stale process identity") != std::string::npos,
+        "discovery rejects an old PID incarnation"
+    );
+    state.process_start_ticks = original_ticks;
+    const auto magic = state.magic;
+    state.magic = 0;
+    check(
+        !monitor::platform::inspect_process_mapping(pid, &reason),
+        "discovery rejects an incompatible layout"
+    );
+    state.magic = magic;
+    state.process_lifecycle.store(
+        static_cast<std::uint32_t>(monitor::lifecycle::starting)
+    );
+    check(
+        !monitor::platform::inspect_process_mapping(pid, &reason),
+        "discovery does not read an unpublished initialization"
+    );
+    state.process_lifecycle.store(
+        static_cast<std::uint32_t>(monitor::lifecycle::running)
+    );
+    const int descriptor = ::shm_open(
+        monitor::platform::shared_memory_name(pid).c_str(), O_RDWR | O_CLOEXEC,
+        0
+    );
+    check(
+        descriptor >= 0,
+        "open owned endpoint for read-only permission regression"
+    );
+    if (descriptor >= 0) {
+        check(
+            ::fchmod(descriptor, S_IRUSR) == 0, "make owned endpoint read-only"
+        );
+        check(
+            monitor::platform::inspect_process_mapping(pid, &reason)
+                .has_value(),
+            "discovery works without writable endpoint access"
+        );
+        check(
+            ::fchmod(descriptor, S_IRUSR | S_IWUSR) == 0,
+            "restore owned endpoint permissions"
+        );
+        ::close(descriptor);
+    }
+    const auto name = monitor::platform::shared_memory_name(pid);
+    for (const auto& rejected :
+         { name + "-malformed",
+           name.substr(0, name.rfind('-') + 1) + "0" + std::to_string(pid),
+           std::string("/monitor-watchdog-")
+               + std::to_string(monitor::platform::current_user_id() + 1U) + "-"
+               + std::to_string(pid) }) {
+        const int file = ::shm_open(
+            rejected.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        );
+        check(file >= 0, "create exclusively owned discovery-name fixture");
+        if (file < 0)
+            continue;
+        const auto inventory = monitor::discover_processes();
+        const auto filename = rejected.substr(1);
+        const bool reported = std::ranges::any_of(
+            inventory.diagnostics,
+            [&](const auto& message) {
+                return message.starts_with(filename + ":");
+            }
+        );
+        const bool foreign = filename.starts_with(
+            "monitor-watchdog-"
+            + std::to_string(monitor::platform::current_user_id() + 1U) + "-"
+        );
+        check(
+            inventory.available && reported != foreign,
+            "malformed current-user names are diagnosed; foreign names are "
+            "ignored"
+        );
+        ::close(file);
+        check(
+            ::shm_unlink(rejected.c_str()) == 0,
+            "only the fixture owner removes its rejected endpoint"
+        );
+    }
+    std::ostringstream text, errors;
+    static_cast<void>(monitor::run_console_list(text, errors));
+    check(
+        text.str().find("PID\tSTART_TICKS\tNAME\n") == 0
+            && text.str().find("discovery?name") != std::string::npos,
+        "list output identifies incarnations and cannot inject rows through "
+        "names"
+    );
+    check(
+        state.watcher_present.load() == 1
+            && state.watcher_lease_until_ns.load() == lease,
+        "inspection and enumeration neither renew nor clear another observer "
+        "lease"
+    );
+    check(
+        monitor::platform::open_process_mapping(pid).has_value(),
+        "listing does not unlink the producer endpoint"
+    );
+
+    int ready[2], finish[2];
+    if (::pipe(ready) != 0) {
+        check(false, "create discovery ready pipe");
+        return;
+    }
+    if (::pipe(finish) != 0) {
+        ::close(ready[0]);
+        ::close(ready[1]);
+        check(false, "create discovery finish pipe");
+        return;
+    }
+    const auto child = ::fork();
+    if (child == 0) {
+        ::close(ready[0]);
+        ::close(finish[1]);
+        auto producer
+            = monitor::platform::create_process_mapping("discovery\nname");
+        const char started = producer ? '1' : '0';
+        static_cast<void>(::write(ready[1], &started, 1));
+        char stop {};
+        static_cast<void>(::read(finish[0], &stop, 1));
+        // This raw platform producer also runs in Release, where the public
+        // client is inert. Publish the same final lifecycle as client::stop().
+        if (producer)
+            producer->get()->process_lifecycle.store(
+                static_cast<std::uint32_t>(monitor::lifecycle::clean_exit),
+                std::memory_order_release
+            );
+        producer.reset();
+        ::_exit(0);
+    }
+    ::close(ready[1]);
+    ::close(finish[0]);
+    if (child < 0) {
+        ::close(ready[0]);
+        ::close(finish[1]);
+        check(false, "fork second discovery producer");
+        return;
+    }
+    char started {};
+    check(
+        ::read(ready[0], &started, 1) == 1 && started == '1',
+        "second real endpoint is published before enumeration"
+    );
+    ::close(ready[0]);
+    const auto child_identity = monitor::platform::read_process_identity(
+        static_cast<std::uint32_t>(child)
+    );
+    if (child_identity) {
+        auto child_watcher = monitor::watchdog_session::attach(*child_identity);
+        auto child_mapping
+            = monitor::platform::open_process_mapping(child_identity->pid);
+        const auto inventory = monitor::discover_processes();
+        const auto same_names = std::ranges::count_if(
+            inventory.processes,
+            [&](const auto& process) {
+                return process.name == "discovery\nname"
+                    && (process.identity.pid == pid
+                        || process.identity.pid == child_identity->pid);
+            }
+        );
+        check(
+            same_names == 2,
+            "equal names retain two distinct process identities without "
+            "arbitrary selection"
+        );
+        check(
+            std::ranges::is_sorted(
+                inventory.processes, {},
+                [](const auto& process) { return process.identity.pid; }
+            ),
+            "discovery order is deterministic"
+        );
+        check(
+            child_watcher && child_mapping,
+            "attach independent observer to second process"
+        );
+        if (child_watcher && child_mapping) {
+            const auto child_lease
+                = child_mapping->get()->watcher_lease_until_ns.load();
+            watcher->release();
+            static_cast<void>(monitor::discover_processes());
+            check(
+                child_mapping->get()->watcher_present.load() == 1
+                    && child_mapping->get()->watcher_lease_until_ns.load()
+                        == child_lease,
+                "detaching A and listing cannot disturb B's lease"
+            );
+        }
+    } else {
+        check(false, "second producer identity is available");
+    }
+    monitor::observation_registry registry;
+    std::optional<monitor::platform::shared_mapping> retained_child;
+    if (child_identity) {
+        check(
+            registry.attach(*identity) && registry.attach(*child_identity),
+            "registry owns two live exact process incarnations"
+        );
+        retained_child
+            = monitor::platform::open_process_mapping(child_identity->pid);
+        check(
+            registry.size() == 2 && retained_child,
+            "registry stores one owner per selection without a process cap"
+        );
+        auto stale = *identity;
+        ++stale.start_ticks;
+        check(
+            !registry.attach(stale) && registry.size() == 2,
+            "a stale incarnation cannot replace the selected process"
+        );
+        check(
+            !registry.detach(stale) && registry.size() == 2,
+            "detaching an unmatched incarnation cannot erase the current one"
+        );
+        const auto lease_a = state.watcher_lease_until_ns.load();
+        check(
+            registry.attach(*identity) && registry.size() == 2
+                && state.watcher_lease_until_ns.load() == lease_a,
+            "repeated attachment reuses its owner without renewing a lease"
+        );
+        auto selections = registry.identities();
+        check(
+            selections.size() == 2
+                && std::ranges::is_sorted(
+                    selections, {}, [](const auto& item) { return item.pid; }
+                ),
+            "registry identities have deterministic order"
+        );
+        const auto snapshot = registry.poll();
+        check(
+            snapshot.size() == 2
+                && std::ranges::all_of(
+                    snapshot,
+                    [](const auto& observation) {
+                        return observation.status
+                            == monitor::observation_status::sampled
+                            && observation.sample && !observation.cpu_percent;
+                    }
+                ),
+            "each registry owner establishes its own first CPU baseline"
+        );
+        static_cast<void>(registry.poll());
+        check(
+            snapshot.size() == 2 && !snapshot[0].cpu_percent
+                && !snapshot[1].cpu_percent,
+            "returned value observations survive later polling"
+        );
+        monitor::observation_registry moved(std::move(registry));
+        registry = std::move(moved);
+        if (retained_child) {
+            const auto lease_b
+                = retained_child->get()->watcher_lease_until_ns.load();
+            check(
+                registry.detach(*identity) && registry.size() == 1
+                    && state.watcher_present.load() == 0
+                    && retained_child->get()->watcher_present.load() == 1
+                    && retained_child->get()->watcher_lease_until_ns.load()
+                        == lease_b,
+                "moving owners and detaching A preserve B's exact lease"
+            );
+        }
+        monitor::process_discovery names;
+        names.available = true;
+        names.processes
+            = { { *identity, "same" }, { *child_identity, "same" } };
+        const auto ambiguous = monitor::select_process_name(names, "same");
+        check(
+            !ambiguous.identity
+                && ambiguous.error.find("ambiguous") != std::string::npos,
+            "equal names require explicit identity selection"
+        );
+        names.processes.pop_back();
+        const auto unique = monitor::select_process_name(names, "same");
+        check(
+            unique.identity && unique.error.empty()
+                && unique.identity->pid == identity->pid
+                && unique.identity->start_ticks == identity->start_ticks,
+            "unique exact names retain the selected incarnation"
+        );
+        check(
+            !monitor::select_process_name(names, "sam").identity
+                && !monitor::select_process_name(names, "").identity,
+            "name selection neither matches prefixes nor accepts empty names"
+        );
+        names.diagnostics.emplace_back("an endpoint could not be inspected");
+        const auto incomplete = monitor::select_process_name(names, "same");
+        check(
+            !incomplete.identity
+                && incomplete.error.find("incomplete") != std::string::npos,
+            "incomplete discovery cannot prove a name unambiguous"
+        );
+        names.diagnostics.clear();
+        names.available = false;
+        check(
+            !monitor::select_process_name(names, "same").identity,
+            "unavailable discovery cannot select a friendly name"
+        );
+    }
+    ::close(finish[1]);
+    int status {};
+    check(
+        ::waitpid(child, &status, 0) == child && WIFEXITED(status)
+            && WEXITSTATUS(status) == 0,
+        "discovery child shuts down and removes its own endpoint"
+    );
+    if (child_identity) {
+        const auto exited = registry.poll();
+        check(
+            exited.size() == 1 && exited[0].identity.pid == child_identity->pid
+                && exited[0].status == monitor::observation_status::exited
+                && exited[0].watchdog.process_lifecycle
+                    == monitor::lifecycle::clean_exit,
+            "registry retains final lifecycle evidence until explicit removal"
+        );
+        check(
+            !registry.attach(*child_identity) && registry.size() == 1,
+            "a repeated selection cannot revive an exited process"
+        );
+        registry.clear();
+        check(
+            registry.size() == 0 && retained_child
+                && retained_child->get()->watcher_present.load() == 0,
+            "clearing the registry releases only its owned remaining lease"
+        );
+    }
+    const auto final = monitor::discover_processes();
+    check(
+        std::ranges::none_of(
+            final.processes,
+            [&](const auto& process) {
+                return process.identity.pid
+                    == static_cast<std::uint32_t>(child);
+            }
+        ),
+        "exited producer is absent from the next inventory"
+    );
+#else
+    const auto inventory = monitor::discover_processes();
+    check(
+        !inventory.available && !inventory.diagnostics.empty(),
+        "unsupported discovery is explicit"
+    );
+#endif
+}
+
+void test_breadcrumb_wrap_order() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    if constexpr (!monitor::instrumentation_enabled)
+        return;
+    monitor::client producer;
+    check(producer.start("ring-order"), "start ring order producer");
+    const auto identity = monitor::platform::read_process_identity(
+        monitor::platform::current_process_id()
+    );
+    if (!identity) {
+        check(false, "ring order process identity");
+        return;
+    }
+    auto raw = monitor::platform::open_process_mapping(identity->pid);
+    auto watcher = monitor::watchdog_session::attach(*identity);
+    if (!raw || !watcher) {
+        check(false, "ring order mapping and watcher");
+        return;
+    }
+    auto& state = *raw->get();
+    const monitor::breadcrumb current {
+        .timestamp_ns = 200,
+        .event_id = 23,
+        .flags = 17,
+        .source_id = 2,
+        .arg0 = 42,
+        .arg1 = 43,
+    };
+    const monitor::breadcrumb delayed {
+        .timestamp_ns = 100,
+        .event_id = 22,
+        .flags = 16,
+        .source_id = 1,
+        .arg0 = 1,
+        .arg1 = 2,
+    };
+    check(
+        !monitor::detail::publish_breadcrumb(state, 0, current),
+        "zero is not a publication ticket"
+    );
+    check(
+        !monitor::detail::publish_breadcrumb(
+            state, (std::numeric_limits<std::uint64_t>::max() >> 1U) + 1U,
+            current
+        ),
+        "ticket exhaustion cannot wrap the commit encoding"
+    );
+    constexpr std::uint64_t wrapped = 1 + monitor::breadcrumb_capacity;
+    state.breadcrumb_ticket.store(wrapped);
+    check(
+        monitor::detail::publish_breadcrumb(state, wrapped, current),
+        "new ticket publishes after wrapping an unclaimed reservation"
+    );
+    check(
+        !monitor::detail::publish_breadcrumb(state, 1, delayed),
+        "delayed reservation cannot replace a newer committed ticket"
+    );
+    const auto snapshot = watcher->snapshot();
+    check(
+        snapshot.breadcrumbs.size() == 1
+            && snapshot.breadcrumbs.front().arg0 == current.arg0
+            && snapshot.breadcrumbs.front().arg1 == current.arg1,
+        "real observer retains the newer complete payload"
+    );
+    auto& slot = state.breadcrumbs[0];
+    // The first publisher is now suspended after claiming, before payload
+    // completion. A wrapped writer must not touch any of its fields.
+    slot.commit.store(3);
+    slot.ticket.store(1);
+    slot.arg0.store(delayed.arg0);
+    slot.arg1.store(delayed.arg1);
+    check(
+        !monitor::detail::publish_breadcrumb(state, wrapped, current),
+        "busy slot drops a wrapped publication without waiting"
+    );
+    check(
+        slot.commit.load() == 3 && slot.ticket.load() == 1
+            && slot.arg0.load() == delayed.arg0
+            && slot.arg1.load() == delayed.arg1,
+        "wrapped publisher leaves the in-flight owner's payload untouched"
+    );
+    check(
+        watcher->snapshot().breadcrumbs.empty(),
+        "observer omits an in-progress or overwritten record"
+    );
+    slot.commit.store(2); // original owner completes; its ticket has expired
+    state.breadcrumb_ticket.store(wrapped + monitor::breadcrumb_capacity);
+    check(
+        monitor::detail::publish_breadcrumb(
+            state, wrapped + monitor::breadcrumb_capacity, current
+        ),
+        "slot accepts later work after its owner completes"
+    );
+    check(
+        watcher->snapshot().breadcrumbs.size() == 1,
+        "observer recovers after a dropped wrap without reset or retry"
+    );
+#endif
+}
+
+void test_concurrent_breadcrumb_snapshots() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    if constexpr (!monitor::instrumentation_enabled)
+        return;
+    monitor::client producer;
+    check(producer.start("ring-writers"), "start concurrent ring producer");
+    const auto identity = monitor::platform::read_process_identity(
+        monitor::platform::current_process_id()
+    );
+    if (!identity) {
+        check(false, "concurrent ring process identity");
+        return;
+    }
+    auto watcher = monitor::watchdog_session::attach(*identity);
+    if (!watcher) {
+        check(false, "attach concurrent ring watcher");
+        return;
+    }
+    watcher->renew_lease(
+        monitor::platform::monotonic_time_ns(), 60'000'000'000ULL
+    );
+    std::barrier start(5);
+    std::atomic<unsigned> completed { 0 };
+    std::array<std::jthread, 4> workers;
+    for (std::size_t index = 0; index < workers.size(); ++index) {
+        workers[index] = std::jthread([&, index] {
+            const auto source = static_cast<std::uint32_t>(index + 1);
+            start.arrive_and_wait();
+            for (std::uint64_t iteration = 0; iteration < 4096; ++iteration) {
+                const auto value
+                    = (static_cast<std::uint64_t>(source) << 32U) | iteration;
+                producer.breadcrumb(
+                    monitor::event::stream_stopped, source, value, ~value, 17
+                );
+            }
+            completed.fetch_add(1);
+        });
+    }
+    bool coherent = true;
+    std::size_t records = 0;
+    const auto inspect = [&] {
+        const auto snapshot = watcher->snapshot();
+        coherent = coherent
+            && snapshot.breadcrumbs.size() <= monitor::breadcrumb_capacity;
+        for (const auto& record : snapshot.breadcrumbs) {
+            ++records;
+            coherent = coherent && record.arg1 == ~record.arg0
+                && record.source_id
+                    == static_cast<std::uint32_t>(record.arg0 >> 32U)
+                && record.event_id
+                    == static_cast<std::uint16_t>(monitor::event::stream_stopped
+                    )
+                && record.flags == 17;
+        }
+    };
+    start.arrive_and_wait();
+    while (completed.load() < workers.size())
+        inspect();
+    for (auto& worker : workers)
+        worker.join();
+    inspect();
+    check(records > 0, "concurrent observer receives real publications");
+    check(coherent, "wrapped concurrent records never mix publisher payloads");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -488,6 +1161,10 @@ int main() {
     test_memory_trend();
     test_health_classification();
     test_client_and_ring();
+    test_client_lifecycle();
+    test_process_discovery();
+    test_breadcrumb_wrap_order();
+    test_concurrent_breadcrumb_snapshots();
     if (failures == 0) {
         std::cout << "monitor watchdog focused tests passed\n";
     }
