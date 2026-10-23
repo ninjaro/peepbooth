@@ -46,6 +46,8 @@ struct breadcrumb {
 struct heartbeat_slot {
     std::atomic<std::uint64_t> timestamp_ns { 0 };
     std::atomic<std::uint64_t> sequence { 0 };
+    std::atomic<std::uint64_t> expected_since_ns { 0 };
+    std::atomic<std::uint64_t> revision { 0 };
     std::atomic<std::uint32_t> active { 0 };
     std::uint32_t reserved {};
 };

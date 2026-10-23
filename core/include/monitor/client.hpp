@@ -17,7 +17,43 @@ inline constexpr bool instrumentation_enabled =
 #endif
 
 class client final {
+    class implementation;
+
 public:
+    // One independently supervised progress domain per fixed channel. A failed
+    // claim is invalid, never a second contributor to somebody else's owner.
+    class progress_owner final {
+    public:
+        progress_owner() = default;
+        ~progress_owner();
+        progress_owner(const progress_owner&) = delete;
+        progress_owner& operator=(const progress_owner&) = delete;
+        progress_owner(progress_owner&& other) noexcept;
+        progress_owner& operator=(progress_owner&& other) noexcept;
+
+        // heartbeat/valid may overlap reset. Join publishers before moving or
+        // destroying this handle; producer shutdown retains its host contract.
+        [[nodiscard]] bool valid() const noexcept;
+
+        void heartbeat() noexcept {
+            if constexpr (instrumentation_enabled)
+                publish_heartbeat();
+        }
+
+        void reset() noexcept;
+
+    private:
+        friend class client;
+        progress_owner(
+            const std::shared_ptr<implementation>& owner, channel value,
+            std::uint64_t identity
+        ) noexcept;
+        std::weak_ptr<implementation> owner_;
+        channel channel_ { channel::main };
+        std::atomic<std::uint64_t> identity_ { 0 };
+        void publish_heartbeat() noexcept;
+    };
+
     client();
     ~client();
     client(const client&) = delete;
@@ -30,6 +66,9 @@ public:
     void stop() noexcept;
     [[nodiscard]] bool available() const noexcept;
 
+    [[nodiscard]] progress_owner expect_progress(channel value) noexcept;
+    // Passive evidence unless an explicit manual expectation is active.
+    // Neither operation can publish for, or retire, a scoped owner.
     void heartbeat(channel value) noexcept;
     void set_channel_active(channel value, bool active) noexcept;
     void breadcrumb(
@@ -44,11 +83,7 @@ public:
     [[nodiscard]] static client& process() noexcept;
 
 private:
-    class implementation;
-    std::unique_ptr<implementation> implementation_;
-    std::atomic<shared_state*> state_ { nullptr };
-
-    [[nodiscard]] shared_state* active_state(std::uint64_t now_ns) noexcept;
+    std::shared_ptr<implementation> implementation_;
 };
 
 // This is the producer-facing boundary. In unsupported builds these inline
@@ -66,6 +101,15 @@ private:
         return client::process().available();
     }
     return false;
+}
+
+[[nodiscard]] inline client::progress_owner
+expect_progress(const channel value) noexcept {
+    if constexpr (instrumentation_enabled) {
+        return client::process().expect_progress(value);
+    }
+    static_cast<void>(value);
+    return {};
 }
 
 inline void heartbeat(const channel value) noexcept {

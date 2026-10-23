@@ -140,6 +140,23 @@
       "tests": {
         "qttest": false
       }
+    },
+    {
+      "id": "watchdog_qt_tests:tests",
+      "kind": "exe",
+      "name": "monitor_qt_lifecycle_tests",
+      "root": "core",
+      "owns": [
+        "tests/monitor/qt_lifecycle_tests.cpp"
+      ],
+      "entry": "tests/monitor/qt_lifecycle_tests.cpp",
+      "dependencies": [
+        "watchdog_qt:qt",
+        "watchdog_runtime:runtime"
+      ],
+      "tests": {
+        "qttest": false
+      }
     }
   ]
 }

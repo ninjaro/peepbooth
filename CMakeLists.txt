@@ -9,6 +9,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if (CMAKE_CXX_STANDARD EQUAL 26 AND CMAKE_VERSION VERSION_LESS 3.25)
+    message(FATAL_ERROR "Ecosystem experimental C++26 requires CMake 3.25 or newer.")
+endif ()
+if (NOT "cxx_std_20" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+    message(FATAL_ERROR "Ecosystem requires C++20; ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} does not advertise it. Select a supported compiler or change manifest.cpp_standard after checking project requirements.")
+endif ()
+if (CMAKE_CXX_STANDARD EQUAL 26)
+    message(WARNING "Ecosystem: C++26 is experimental; compiler and standard-library feature support must be verified by the project.")
+endif ()
+set(ECOSYSTEM_RESOLVED_CXX_STANDARD ${CMAKE_CXX_STANDARD} CACHE INTERNAL "Resolved C++ standard" FORCE)
+set(ECOSYSTEM_RESOLVED_CXX_COMPILER "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}" CACHE INTERNAL "Resolved C++ compiler" FORCE)
+
 include(GNUInstallDirs)
 
 if (NOT CMAKE_BUILD_TYPE)

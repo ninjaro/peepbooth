@@ -13,14 +13,20 @@ namespace {
     read_heartbeat(const heartbeat_slot& slot, const channel id) noexcept {
         heartbeat_snapshot result;
         result.id = id;
+        result.coherent = false;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            const auto before = slot.sequence.load(std::memory_order_acquire);
-            result.active = slot.active.load(std::memory_order_acquire) != 0;
+            const auto before = slot.revision.load(std::memory_order_seq_cst);
+            if ((before & 1U) != 0)
+                continue;
+            result.active = slot.active.load(std::memory_order_relaxed) != 0;
             result.timestamp_ns
-                = slot.timestamp_ns.load(std::memory_order_acquire);
-            const auto after = slot.sequence.load(std::memory_order_acquire);
-            result.sequence = after;
-            if (before == after) {
+                = slot.timestamp_ns.load(std::memory_order_relaxed);
+            result.sequence = slot.sequence.load(std::memory_order_relaxed);
+            result.expected_since_ns
+                = slot.expected_since_ns.load(std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (before == slot.revision.load(std::memory_order_seq_cst)) {
+                result.coherent = true;
                 break;
             }
         }
@@ -57,13 +63,17 @@ namespace {
 watchdog_session::~watchdog_session() { release(); }
 
 watchdog_session::watchdog_session(watchdog_session&& other) noexcept
-    : mapping_(std::move(other.mapping_)) { }
+    : mapping_(std::move(other.mapping_))
+    , observation_started_ns_(std::exchange(other.observation_started_ns_, 0)) {
+}
 
-watchdog_session& watchdog_session::operator=(watchdog_session&& other
-) noexcept {
+watchdog_session&
+watchdog_session::operator=(watchdog_session&& other) noexcept {
     if (this != &other) {
         release();
         mapping_ = std::move(other.mapping_);
+        observation_started_ns_
+            = std::exchange(other.observation_started_ns_, 0);
     }
     return *this;
 }
@@ -90,6 +100,7 @@ watchdog_snapshot watchdog_session::snapshot() const {
     if (state == nullptr) {
         return result;
     }
+    result.observation_started_ns = observation_started_ns_;
     const auto name_end = std::find(
         state->process_name.begin(), state->process_name.end(), '\0'
     );
@@ -130,7 +141,20 @@ void watchdog_session::renew_lease(
     if (state == nullptr) {
         return;
     }
+    const auto process_lifecycle = static_cast<lifecycle>(
+        state->process_lifecycle.load(std::memory_order_acquire)
+    );
+    if (process_lifecycle == lifecycle::stopping
+        || process_lifecycle == lifecycle::clean_exit) {
+        state->watcher_present.store(0, std::memory_order_release);
+        state->watcher_lease_until_ns.store(0, std::memory_order_release);
+        return;
+    }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    if (state->watcher_present.load(std::memory_order_acquire) == 0
+        || state->watcher_lease_until_ns.load(std::memory_order_acquire)
+            < now_ns)
+        observation_started_ns_ = now_ns;
     state->watcher_lease_until_ns.store(
         duration_ns > maximum - now_ns ? maximum : now_ns + duration_ns,
         std::memory_order_release
@@ -144,6 +168,7 @@ void watchdog_session::release() noexcept {
         state->watcher_lease_until_ns.store(0, std::memory_order_release);
     }
     mapping_ = {};
+    observation_started_ns_ = 0;
 }
 
 memory_trend::memory_trend(
@@ -237,50 +262,86 @@ memory_trend_summary memory_trend::summary() const noexcept {
 
 std::size_t memory_trend::size() const noexcept { return points_.size(); }
 
+progress_condition assess_progress(
+    const heartbeat_snapshot& heartbeat,
+    const std::uint64_t observation_started_ns, const std::uint64_t now_ns,
+    const std::uint64_t stale_after_ns
+) noexcept {
+    if (!heartbeat.coherent)
+        return progress_condition::unavailable;
+    if (!heartbeat.active)
+        return progress_condition::inactive;
+    const auto baseline
+        = std::max(heartbeat.expected_since_ns, observation_started_ns);
+    const bool pending
+        = heartbeat.timestamp_ns == 0 || heartbeat.timestamp_ns < baseline;
+    const auto evidence = pending ? baseline : heartbeat.timestamp_ns;
+    if (now_ns >= evidence && now_ns - evidence > stale_after_ns)
+        return progress_condition::overdue;
+    return pending ? progress_condition::pending : progress_condition::current;
+}
+
 health classify_health(
     const watchdog_snapshot& snapshot, const std::uint64_t now_ns,
     const std::uint64_t stale_after_ns, const double cpu_percent
 ) noexcept {
+    if (snapshot.process_lifecycle == lifecycle::stopping
+        || snapshot.process_lifecycle == lifecycle::clean_exit)
+        return health::idle;
     bool any_active = false;
     bool any_current = false;
     bool any_stale = false;
     bool gui_active = false;
     bool gui_stale = false;
     bool non_gui_current = false;
+    bool any_pending = false;
     for (const auto& heartbeat : snapshot.heartbeats) {
-        if (!heartbeat.active) {
+        const auto condition = assess_progress(
+            heartbeat, snapshot.observation_started_ns, now_ns, stale_after_ns
+        );
+        if (condition == progress_condition::unavailable)
+            return health::evidence_unavailable;
+        if (condition == progress_condition::inactive) {
             continue;
         }
         any_active = true;
-        const bool stale = heartbeat.timestamp_ns == 0
-            || (now_ns >= heartbeat.timestamp_ns
-                && now_ns - heartbeat.timestamp_ns > stale_after_ns);
-        any_current = any_current || !stale;
+        const bool stale = condition == progress_condition::overdue;
+        const bool current = condition == progress_condition::current;
+        any_pending = any_pending || condition == progress_condition::pending;
+        any_current = any_current || current;
         any_stale = any_stale || stale;
         if (heartbeat.id == channel::gui) {
             gui_active = true;
             gui_stale = stale;
         } else {
-            non_gui_current = non_gui_current || !stale;
+            non_gui_current = non_gui_current || current;
         }
     }
     if (!any_active) {
-        return health::awaiting_heartbeat;
+        return snapshot.process_lifecycle == lifecycle::running
+            ? health::idle
+            : health::awaiting_heartbeat;
     }
     if (gui_active && gui_stale && non_gui_current) {
         return health::gui_stalled;
     }
-    if (!any_current) {
+    if (!any_current && !any_pending) {
         return cpu_percent >= 20.0 ? health::globally_stalled_busy
                                    : health::globally_stalled_idle;
     }
-    return any_stale ? health::degraded : health::healthy;
+    if (any_stale)
+        return health::degraded;
+    return any_pending ? health::awaiting_heartbeat : health::healthy;
 }
 
 const char* health_name(const health value) noexcept {
     switch (value) {
     case health::awaiting_heartbeat:
         return "AWAITING_HEARTBEAT";
+    case health::idle:
+        return "IDLE";
+    case health::evidence_unavailable:
+        return "EVIDENCE_UNAVAILABLE";
     case health::healthy:
         return "HEALTHY";
     case health::degraded:

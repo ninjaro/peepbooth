@@ -41,7 +41,7 @@ inspect_process_mapping(const std::uint32_t pid, std::string* error_message) {
         return std::nullopt;
     }
 
-    struct stat metadata { };
+    struct stat metadata {};
 
     if (::fstat(mapping.descriptor_, &metadata) != 0) {
         *error_message = "cannot inspect endpoint: "

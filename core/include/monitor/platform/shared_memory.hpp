@@ -37,8 +37,8 @@ public:
 private:
     friend std::optional<shared_mapping>
     create_process_mapping(std::string_view process_name);
-    friend std::optional<shared_mapping> open_process_mapping(std::uint32_t pid
-    );
+    friend std::optional<shared_mapping>
+    open_process_mapping(std::uint32_t pid);
     friend std::optional<process_endpoint>
     inspect_process_mapping(std::uint32_t pid, std::string* error_message);
 

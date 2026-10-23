@@ -33,10 +33,10 @@ namespace {
         );
     }
 
-    std::optional<std::uint64_t> parse_unsigned(std::string_view value
-    ) noexcept {
-        while (!value.empty() && (value.front() == ' ' || value.front() == '\t')
-        ) {
+    std::optional<std::uint64_t>
+    parse_unsigned(std::string_view value) noexcept {
+        while (!value.empty()
+               && (value.front() == ' ' || value.front() == '\t')) {
             value.remove_prefix(1);
         }
         const std::size_t end = value.find_first_not_of("0123456789");
@@ -109,8 +109,8 @@ namespace {
 
 } // namespace
 
-std::optional<process_memory> parse_proc_status(const std::string_view contents
-) noexcept {
+std::optional<process_memory>
+parse_proc_status(const std::string_view contents) noexcept {
     const auto rss = status_value_kib(contents, "VmRSS:");
     if (!rss) {
         return std::nullopt;
@@ -225,8 +225,9 @@ bool process_handle::alive() const {
         if (::poll(&descriptor, 1, 0) > 0 && (descriptor.revents & POLLIN)) {
             return false;
         }
-    } else if (::kill(static_cast<pid_t>(identity_.pid), 0) != 0
-               && errno == ESRCH) {
+    } else if (
+        ::kill(static_cast<pid_t>(identity_.pid), 0) != 0 && errno == ESRCH
+    ) {
         return false;
     }
     const auto current = read_process_identity(identity_.pid);

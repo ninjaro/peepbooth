@@ -30,6 +30,11 @@ bool observation_registry::detach(const platform::process_identity identity) {
 
 void observation_registry::clear() noexcept { processes_.clear(); }
 
+bool observation_registry::wait_for_exit(const int timeout_ms) const {
+    return processes_.empty()
+        || processes_.begin()->second.wait_for_exit(timeout_ms);
+}
+
 std::size_t observation_registry::size() const noexcept {
     return processes_.size();
 }

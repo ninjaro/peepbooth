@@ -17,6 +17,8 @@ inline constexpr std::uint64_t default_watcher_lease_ns = 3'000'000'000ULL;
 
 enum class health {
     awaiting_heartbeat,
+    idle,
+    evidence_unavailable,
     healthy,
     // Some active channels lack recent evidence while others still publish.
     // This does not establish that the application should currently be busy.
@@ -31,13 +33,31 @@ struct heartbeat_snapshot {
     bool active {};
     std::uint64_t timestamp_ns {};
     std::uint64_t sequence {};
+    std::uint64_t expected_since_ns {};
+    bool coherent { true };
 };
+
+enum class progress_condition {
+    inactive,
+    pending,
+    current,
+    overdue,
+    unavailable
+};
+
+// The same inclusive stale boundary used by the aggregate watchdog. This
+// describes channel evidence, not an operation identity or a deadlock proof.
+[[nodiscard]] progress_condition assess_progress(
+    const heartbeat_snapshot& heartbeat, std::uint64_t observation_started_ns,
+    std::uint64_t now_ns, std::uint64_t stale_after_ns
+) noexcept;
 
 struct watchdog_snapshot {
     std::string process_name;
     lifecycle process_lifecycle { lifecycle::starting };
     std::array<heartbeat_snapshot, heartbeat_channel_count> heartbeats {};
     std::vector<breadcrumb> breadcrumbs;
+    std::uint64_t observation_started_ns {};
 };
 
 class watchdog_session final {
@@ -62,6 +82,7 @@ public:
 
 private:
     platform::shared_mapping mapping_;
+    std::uint64_t observation_started_ns_ {};
 };
 
 struct memory_trend_summary {

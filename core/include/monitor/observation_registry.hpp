@@ -26,6 +26,9 @@ public:
     [[nodiscard]] bool attach(platform::process_identity identity);
     bool detach(platform::process_identity identity);
     void clear() noexcept;
+    // Frontend-selected wait; another member's exit is observed at the next
+    // poll.
+    [[nodiscard]] bool wait_for_exit(int timeout_ms) const;
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] std::vector<platform::process_identity> identities() const;
     // Value snapshots survive the next poll or membership change. Exited

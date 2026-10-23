@@ -10,17 +10,19 @@ gui_heartbeat::gui_heartbeat(QObject* parent, const int interval_ms)
     if (!process_available()) {
         return;
     }
-    set_channel_active(channel::gui, true);
+    progress_ = expect_progress(channel::gui);
+    if (!progress_.valid()) {
+        return;
+    }
     timer_.setInterval(interval_ms);
     timer_.setTimerType(Qt::CoarseTimer);
-    connect(&timer_, &QTimer::timeout, this, [] { heartbeat(channel::gui); });
+    connect(&timer_, &QTimer::timeout, this, [this] { progress_.heartbeat(); });
     timer_.start();
 }
 
 gui_heartbeat::~gui_heartbeat() {
-    if (timer_.isActive()) {
-        set_channel_active(channel::gui, false);
-    }
+    timer_.stop();
+    progress_.reset();
 }
 
 } // namespace monitor::qt

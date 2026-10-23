@@ -134,7 +134,7 @@ std::optional<shared_mapping> open_process_mapping(const std::uint32_t pid) {
         return std::nullopt;
     }
 
-    struct stat metadata { };
+    struct stat metadata {};
 
     if (::fstat(descriptor, &metadata) != 0
         || metadata.st_size != static_cast<off_t>(sizeof(shared_state))
