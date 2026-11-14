@@ -423,12 +423,17 @@ set(MONITOR_WATCHDOG_RUNTIME_RUNTIME_RUNTIME_SOURCES
 )
 set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/core/include/monitor/console_watch.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch_internal.hpp
 )
 set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch_format.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch_recording.cpp
 )
 set(MONITOR_WATCHDOG_CONSOLE_CONSOLE_RUNTIME_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch_format.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/src/monitor/console_watch_recording.cpp
 )
 set(MONITOR_WATCHDOG_CLI_CLI_HEADERS
 )
@@ -678,4 +683,3 @@ install(EXPORT monitorTargets NAMESPACE monitor::
 install(FILES "${_monitor_package_dir}/monitorConfig.cmake"
               "${_monitor_package_dir}/monitorConfigVersion.cmake"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/monitor")
-

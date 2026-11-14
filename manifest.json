@@ -2,7 +2,6 @@
   "id": "monitor",
   "description": "External process watchdog and failure-diagnostics console.",
   "version": "0.2.0",
-  "cpp_standard": 20,
   "facade": "watchdog_cli:cli",
   "install_artifacts": [
     "watchdog_client:client",
@@ -12,7 +11,6 @@
     {
       "id": "watchdog_contract:contract",
       "kind": "interface_lib",
-      "name": "monitor_watchdog_contract",
       "root": "core",
       "owns": [
         "include/monitor/shared_state.hpp"
@@ -74,8 +72,7 @@
       "name": "monitor_watchdog_console",
       "root": "core",
       "owns": [
-        "include/monitor/console_watch.hpp",
-        "src/monitor/console_watch.cpp"
+        "monitor/console_watch"
       ],
       "dependencies": [
         "watchdog_runtime:runtime"
@@ -104,10 +101,6 @@
       "kind": "exe",
       "name": "monitor",
       "root": "core",
-      "owns": [
-        "src/main.cpp"
-      ],
-      "entry": "src/main.cpp",
       "dependencies": [
         "watchdog_console:console"
       ]
@@ -117,9 +110,6 @@
       "kind": "exe",
       "name": "monitor_instrumentation_benchmarks",
       "root": "core",
-      "owns": [
-        "benchmarks/monitor/instrumentation_benchmarks.cpp"
-      ],
       "entry": "benchmarks/monitor/instrumentation_benchmarks.cpp",
       "dependencies": [
         "watchdog_runtime:runtime"
@@ -131,32 +121,23 @@
       "name": "monitor_watchdog_tests",
       "root": "core",
       "owns": [
-        "tests/monitor/watchdog_tests.cpp"
+        "tests/monitor/watchdog"
       ],
       "entry": "tests/monitor/watchdog_tests.cpp",
       "dependencies": [
         "watchdog_console:console"
-      ],
-      "tests": {
-        "qttest": false
-      }
+      ]
     },
     {
       "id": "watchdog_qt_tests:tests",
       "kind": "exe",
       "name": "monitor_qt_lifecycle_tests",
       "root": "core",
-      "owns": [
-        "tests/monitor/qt_lifecycle_tests.cpp"
-      ],
       "entry": "tests/monitor/qt_lifecycle_tests.cpp",
       "dependencies": [
         "watchdog_qt:qt",
         "watchdog_runtime:runtime"
-      ],
-      "tests": {
-        "qttest": false
-      }
+      ]
     }
   ]
 }
